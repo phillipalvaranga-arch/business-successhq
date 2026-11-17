@@ -303,6 +303,7 @@ html[data-theme="dark"] .tabs a.active { color: var(--gold-2); }
 }
 @media (max-width: 520px) {
   .brand-sub { display: none; }
+  .brand-full { display: none; }
 }
 
 /* Type and layout */
