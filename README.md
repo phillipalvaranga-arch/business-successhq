@@ -1,6 +1,6 @@
 # Business SuccessHQ
 
-An original planning app for any business idea. Capture ideas, score them, validate them, write a plan, follow official checklists, and track goals, habits, and numbers you enter yourself. Video notes let you paste a YouTube summary, write how you will use it in your business, and keep step-by-step instructions you can check off — all on this device.
+An original planning app for any business idea. Capture ideas, score them, validate them, write a plan, follow official checklists, and track goals, habits, and numbers you enter yourself. Video notes let you paste a YouTube summary or import a PDF, Word, or Excel file, write how you will use it in your business, and keep step-by-step instructions you can check off — all on this device. Imported files are read in the browser and are not uploaded.
 
 Live: https://phillipalvaranga-arch.github.io/business-successhq/
 

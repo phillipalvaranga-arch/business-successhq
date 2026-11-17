@@ -1,4 +1,4 @@
-const C = 'bizhq-v5';
+const C = 'bizhq-v6';
 const F = [
   './',
   'index.html',
@@ -11,7 +11,11 @@ const F = [
   'icons/maskable-512.png',
   'icons/apple-touch-icon.png',
   'icons/favicon.png',
-  'icon.ico'
+  'icon.ico',
+  'vendor/pdf.min.js',
+  'vendor/pdf.worker.min.js',
+  'vendor/mammoth.browser.min.js',
+  'vendor/xlsx.full.min.js'
 ];
 
 self.addEventListener('install', (e) => {

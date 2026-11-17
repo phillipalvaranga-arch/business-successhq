@@ -26,6 +26,7 @@
   let vnVenture = "";
   let vnFormSteps = [];
   let vnEditingStep = "";
+  let vnImportState = null;
   let toastTimer = 0;
 
   function uid() {
@@ -1108,6 +1109,405 @@
   const VN_USE_MAX = 8000;
   const VN_STEP_MAX = 500;
 
+  const VN_FILE_MAX = 20 * 1024 * 1024;
+  const vnLibPromises = {};
+
+  function vendorSrc(file) {
+    try {
+      const s = document.querySelector('script[src*="app.js"]');
+      if (s && s.src) return new URL("vendor/" + file, s.src).href;
+    } catch (e) {}
+    return "vendor/" + file;
+  }
+
+  function loadVendorScript(file) {
+    if (!vnLibPromises[file]) {
+      vnLibPromises[file] = new Promise(function (resolve, reject) {
+        if (document.querySelector('script[data-vendor="' + file + '"]')) {
+          resolve();
+          return;
+        }
+        const s = document.createElement("script");
+        s.src = vendorSrc(file);
+        s.async = true;
+        s.dataset.vendor = file;
+        s.onload = function () { resolve(); };
+        s.onerror = function () {
+          delete vnLibPromises[file];
+          reject(new Error("load"));
+        };
+        document.head.appendChild(s);
+      });
+    }
+    return vnLibPromises[file];
+  }
+
+  function fileExt(name) {
+    const m = String(name || "").toLowerCase().match(/\.([a-z0-9]+)$/);
+    return m ? m[1] : "";
+  }
+
+  function sniffFileKind(file, buf) {
+    const ext = fileExt(file.name);
+    const u8 = new Uint8Array(buf.slice(0, 8));
+    const head = String.fromCharCode.apply(null, Array.from(u8));
+    const isPdf = head.indexOf("%PDF") === 0;
+    const isZip = u8[0] === 0x50 && u8[1] === 0x4B;
+    const isOle = u8[0] === 0xD0 && u8[1] === 0xCF && u8[2] === 0x11 && u8[3] === 0xE0;
+    const mime = String(file.type || "").toLowerCase();
+
+    if (ext === "pdf" || isPdf) return "pdf";
+    if (ext === "csv" || mime.indexOf("csv") !== -1) return "sheet";
+    if (ext === "xlsx" || ext === "xls") return "sheet";
+    if (ext === "docx") return "docx";
+    if (ext === "doc") return isZip ? "docx" : "old-doc";
+    if (isPdf) return "pdf";
+    if (isZip) {
+      const zip = zipPeekKind(buf);
+      if (zip) return zip;
+      if (mime.indexOf("word") !== -1) return "docx";
+      if (mime.indexOf("sheet") !== -1 || mime.indexOf("excel") !== -1) return "sheet";
+    }
+    if (isOle) return ext === "xls" || mime.indexOf("excel") !== -1 ? "sheet" : "old-doc";
+    return "unknown";
+  }
+
+  function zipPeekKind(buf) {
+    try {
+      const s = new TextDecoder("latin1").decode(new Uint8Array(buf));
+      if (s.indexOf("word/document.xml") !== -1) return "docx";
+      if (s.indexOf("xl/workbook") !== -1 || s.indexOf("xl/worksheets") !== -1) return "sheet";
+    } catch (e) {}
+    return "";
+  }
+
+  function pdfItemsToText(content) {
+    const items = content.items || [];
+    const lines = [];
+    let line = "";
+    let lastY = null;
+    items.forEach(function (it) {
+      const str = it.str || "";
+      const y = it.transform ? it.transform[5] : 0;
+      if (it.hasEOL) {
+        line += str;
+        if (line.trim()) lines.push(line.trim());
+        line = "";
+        lastY = null;
+        return;
+      }
+      if (lastY != null && Math.abs(y - lastY) > 4) {
+        if (line.trim()) lines.push(line.trim());
+        line = str;
+      } else {
+        if (line && !/\s$/.test(line) && str && !/^\s/.test(str)) line += " ";
+        line += str;
+      }
+      lastY = y;
+    });
+    if (line.trim()) lines.push(line.trim());
+    return lines.join("\n");
+  }
+
+  async function extractPdfText(buf) {
+    await loadVendorScript("pdf.min.js");
+    const lib = window.pdfjsLib;
+    if (!lib) throw new Error("pdfjs");
+    lib.GlobalWorkerOptions.workerSrc = vendorSrc("pdf.worker.min.js");
+    const data = new Uint8Array(buf.slice(0));
+    let doc;
+    try {
+      doc = await lib.getDocument({ data: data }).promise;
+    } catch (e) {
+      doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), disableWorker: true }).promise;
+    }
+    const pages = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      const text = pdfItemsToText(content);
+      if (text) pages.push(text);
+    }
+    return pages.join("\n\n");
+  }
+
+  async function extractDocxText(buf) {
+    await loadVendorScript("mammoth.browser.min.js");
+    if (!window.mammoth) throw new Error("mammoth");
+    const result = await window.mammoth.extractRawText({ arrayBuffer: buf });
+    return String(result && result.value ? result.value : "").replace(/\r\n/g, "\n").trim();
+  }
+
+  async function extractWorkbook(buf, file) {
+    await loadVendorScript("xlsx.full.min.js");
+    if (!window.XLSX) throw new Error("xlsx");
+    const ext = fileExt(file.name);
+    let wb;
+    if (ext === "csv" || (file.type || "").toLowerCase().indexOf("csv") !== -1) {
+      let text = "";
+      try { text = new TextDecoder("utf-8").decode(buf); } catch (e) { text = ""; }
+      wb = window.XLSX.read(text || buf, { type: text ? "string" : "array", raw: false });
+    } else {
+      wb = window.XLSX.read(new Uint8Array(buf), { type: "array", cellDates: true, raw: false });
+    }
+    const sheets = {};
+    (wb.SheetNames || []).forEach(function (name) {
+      sheets[name] = sheetToText(wb.Sheets[name]);
+    });
+    return { names: wb.SheetNames || [], sheets: sheets };
+  }
+
+  function sheetToText(ws) {
+    if (!ws) return "";
+    const rows = window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "", blankrows: false });
+    return rows.map(function (row) {
+      return (row || []).map(function (c) {
+        return String(c == null ? "" : c).trim();
+      }).filter(Boolean).join(" — ");
+    }).filter(Boolean).join("\n");
+  }
+
+  function importBoxHtml() {
+    return '<div class="card accent vn-import" id="vnImportBox">' +
+      "<h2>Import from file</h2>" +
+      "<p class=\"help\">Choose a PDF, Word (.docx), Excel, or CSV file. The text is read on this device and is not uploaded anywhere.</p>" +
+      '<p class="row"><button type="button" class="btn" data-action="vn-import-file">Import from file</button></p>' +
+      '<input id="vnFileInput" type="file" accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" hidden>' +
+      '<div class="vn-drop hide-sm" id="vnDrop" tabindex="0">Drop a PDF, Word, or Excel file here</div>' +
+      '<div id="vnImportPreview" class="vn-preview"' + (vnImportState ? "" : " hidden") + "></div></div>";
+  }
+
+  function paintVnImportPreview() {
+    const box = document.getElementById("vnImportPreview");
+    if (!box) return;
+    const st = vnImportState;
+    if (!st) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.hidden = false;
+    const chars = formatViews((st.text || "").length);
+    let html = "<h3>Import preview</h3>" +
+      '<p class="tiny">Source file: ' + esc(st.fileName) + (st.kindLabel ? " · " + esc(st.kindLabel) : "") +
+      " · " + chars + " character" + ((st.text || "").length === 1 ? "" : "s") + "</p>";
+    if (st.sheetNames && st.sheetNames.length) {
+      html += '<div class="field"><label><span>Sheet</span><select data-action="vn-import-sheet">';
+      st.sheetNames.forEach(function (name) {
+        html += '<option value="' + esc(name) + '"' + (name === st.sheetName ? " selected" : "") + ">" + esc(name) + "</option>";
+      });
+      html += "</select></label></div>";
+    }
+    if (st.warning) html += '<p class="notice warning">' + esc(st.warning) + "</p>";
+    if (st.text) {
+      const shown = st.text.length > 4000 ? st.text.slice(0, 4000) + "\n\n[Preview trimmed. The full text will be added to the note, up to the field limit.]" : st.text;
+      html += '<pre class="vn-preview-text">' + esc(shown) + "</pre>";
+      html += '<fieldset class="vn-dest"><legend>Add this text to</legend>' +
+        '<label><input type="radio" name="vnImportDest" value="summary" checked> Video summary</label>' +
+        "<label><input type=\"radio\" name=\"vnImportDest\" value=\"use\"> How I’ll use this in my business</label>" +
+        '<label><input type="radio" name="vnImportDest" value="steps"> How to do it steps (split into a checklist)</label>' +
+        "</fieldset>" +
+        "<fieldset class=\"vn-dest\"><legend>If that part already has text</legend>" +
+        '<label><input type="radio" name="vnImportMode" value="append" checked> Add below what’s there</label>' +
+        '<label><input type="radio" name="vnImportMode" value="replace"> Replace what’s there</label>' +
+        "</fieldset>" +
+        '<p class="row"><button type="button" class="btn primary" data-action="vn-import-apply">Add to the note</button>' +
+        '<button type="button" class="btn" data-action="vn-import-clear">Clear preview</button></p>';
+    } else {
+      html += '<p class="row"><button type="button" class="btn" data-action="vn-import-clear">Clear preview</button></p>';
+    }
+    box.innerHTML = html;
+  }
+
+  function setImportStatus(msg) {
+    const box = document.getElementById("vnImportPreview");
+    if (!box) return;
+    box.hidden = false;
+    box.innerHTML = '<p class="help">' + esc(msg) + "</p>";
+  }
+
+  async function importNoteFile(file) {
+    if (!file) return;
+    if (file.size > VN_FILE_MAX) {
+      vnImportState = {
+        fileName: file.name,
+        text: "",
+        warning: "This file is larger than 20 MB, which is too large to read in the browser. Try a smaller file, or copy the text and paste it instead."
+      };
+      paintVnImportPreview();
+      return;
+    }
+    setImportStatus("Reading “" + file.name + "” on this device…");
+    try {
+      const buf = await file.arrayBuffer();
+      const kind = sniffFileKind(file, buf);
+      if (kind === "old-doc") {
+        vnImportState = {
+          fileName: file.name,
+          kindLabel: "Word (.doc)",
+          text: "",
+          warning: "This looks like an older Word .doc file. This app can read .docx files. In Word, use File → Save As and choose Word Document (.docx), then import that file."
+        };
+        paintVnImportPreview();
+        return;
+      }
+      if (kind === "unknown") {
+        vnImportState = {
+          fileName: file.name,
+          text: "",
+          warning: "This file type is not supported. You can import a PDF, a Word .docx file, or an Excel or CSV file. Older Word .doc files need to be saved as .docx first."
+        };
+        paintVnImportPreview();
+        return;
+      }
+      if (kind === "pdf") {
+        const text = await extractPdfText(buf);
+        const empty = !String(text || "").trim();
+        vnImportState = {
+          fileName: file.name,
+          kindLabel: "PDF",
+          text: String(text || "").trim(),
+          warning: empty ? "This PDF does not contain selectable text. It may be a scanned or image-only file. Try a PDF that has text, or type or paste the notes yourself." : ""
+        };
+        paintVnImportPreview();
+        return;
+      }
+      if (kind === "docx") {
+        const text = await extractDocxText(buf);
+        const empty = !String(text || "").trim();
+        vnImportState = {
+          fileName: file.name,
+          kindLabel: "Word",
+          text: String(text || "").trim(),
+          warning: empty ? "No text could be read from this Word file. If it is mostly images, type or paste the notes yourself." : ""
+        };
+        paintVnImportPreview();
+        return;
+      }
+      if (kind === "sheet") {
+        const wb = await extractWorkbook(buf, file);
+        const names = wb.names.length ? wb.names : Object.keys(wb.sheets);
+        const first = names[0] || "";
+        vnImportState = {
+          fileName: file.name,
+          kindLabel: fileExt(file.name) === "csv" ? "CSV" : "Excel",
+          sheetNames: names,
+          sheetName: first,
+          sheets: wb.sheets,
+          text: (wb.sheets[first] || "").trim(),
+          warning: !(wb.sheets[first] || "").trim() ? "That sheet does not have any text in it. Try another sheet, if there is one." : ""
+        };
+        paintVnImportPreview();
+        return;
+      }
+    } catch (err) {
+      vnImportState = {
+        fileName: file.name,
+        text: "",
+        warning: "Could not read this file on this device. If you are offline, open the app once while online so the file readers can be stored, then try again. You can also copy the text and paste it."
+      };
+      paintVnImportPreview();
+    }
+  }
+
+  function changeImportSheet(name) {
+    if (!vnImportState || !vnImportState.sheets) return;
+    vnImportState.sheetName = name;
+    vnImportState.text = String(vnImportState.sheets[name] || "").trim();
+    vnImportState.warning = vnImportState.text ? "" : "That sheet does not have any text in it. Try another sheet, if there is one.";
+    paintVnImportPreview();
+  }
+
+  function applyVnImport() {
+    const st = vnImportState;
+    if (!st || !String(st.text || "").trim()) {
+      toast("There is no text to add.");
+      return;
+    }
+    const form = vnFormEl();
+    if (!form) {
+      toast("Open a new or existing video note to add this text.");
+      return;
+    }
+    const destEl = document.querySelector('input[name="vnImportDest"]:checked');
+    const modeEl = document.querySelector('input[name="vnImportMode"]:checked');
+    const dest = destEl ? destEl.value : "summary";
+    const replace = modeEl && modeEl.value === "replace";
+    const text = st.text;
+
+    if (form.sourceFile) {
+      form.sourceFile.value = String(st.fileName || "").slice(0, 200);
+      const wrap = document.getElementById("vnSourceField");
+      if (wrap) wrap.hidden = false;
+    }
+    if (form.title && !String(form.title.value || "").trim() && st.fileName) {
+      form.title.value = String(st.fileName).replace(/\.[^.]+$/, "").slice(0, 200);
+    }
+
+    if (dest === "steps") {
+      const parts = splitSteps(text).map(function (t) { return t.slice(0, VN_STEP_MAX); }).filter(Boolean);
+      if (!parts.length) {
+        toast("No steps could be made from that text.");
+        return;
+      }
+      const next = parts.map(function (t) { return { id: uid(), text: t, done: false }; });
+      vnFormSteps = replace ? next : copySteps(vnFormSteps).concat(next);
+      vnEditingStep = "";
+      persistVnDraftFromForm();
+      refreshHowtoBlock();
+      toast("Added " + parts.length + " step" + (parts.length === 1 ? "" : "s") + " from the file.");
+      return;
+    }
+
+    const field = dest === "use" ? form.useInBusiness : form.summary;
+    const max = dest === "use" ? VN_USE_MAX : VN_SUMMARY_MAX;
+    const countId = dest === "use" ? "vnUseCount" : "vnSummaryCount";
+    const current = replace ? "" : String(field.value || "").replace(/\s*$/, "");
+    let next = current ? current + "\n\n" + text : text;
+    let trimmed = false;
+    if (next.length > max) {
+      next = next.slice(0, max);
+      trimmed = true;
+    }
+    field.value = next;
+    updateCharCount(field, countId, max);
+    persistVnDraftFromForm();
+    toast(trimmed
+      ? "Added the text, shortened to the field limit."
+      : (dest === "use" ? "Added the text to “How I’ll use this.”" : "Added the text to the summary."));
+  }
+
+  function clearVnImport() {
+    vnImportState = null;
+    paintVnImportPreview();
+    const input = document.getElementById("vnFileInput");
+    if (input) input.value = "";
+  }
+
+  function bindVnImportUi() {
+    const box = document.getElementById("vnImportBox");
+    if (!box) return;
+    const over = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      box.classList.add("dragover");
+    };
+    const out = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      box.classList.remove("dragover");
+    };
+    box.addEventListener("dragenter", over);
+    box.addEventListener("dragover", over);
+    box.addEventListener("dragleave", out);
+    box.addEventListener("drop", function (e) {
+      out(e);
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files[0]) importNoteFile(files[0]);
+    });
+    if (vnImportState) paintVnImportPreview();
+  }
+
   function getVideoNote(id) {
     return (state.videoNotes || []).find((n) => n.id === id) || null;
   }
@@ -1258,6 +1658,7 @@
       useInBusiness: form.useInBusiness ? form.useInBusiness.value : "",
       ventureId: form.ventureId ? form.ventureId.value : "",
       tags: form.tags ? form.tags.value : "",
+      sourceFile: form.sourceFile ? form.sourceFile.value : "",
       howToSteps: copySteps(vnFormSteps)
     };
   }
@@ -1267,7 +1668,7 @@
     if (!data) return;
     const has = String(data.title || "").trim() || String(data.youtubeUrl || "").trim() ||
       String(data.summary || "").trim() || String(data.useInBusiness || "").trim() ||
-      (data.howToSteps && data.howToSteps.length) || String(data.tags || "").trim() || data.ventureId;
+      (data.howToSteps && data.howToSteps.length) || String(data.tags || "").trim() || data.ventureId || String(data.sourceFile || "").trim();
     if (!has) {
       clearVnDraft();
       const hint = document.getElementById("vnDraftHint");
@@ -1303,7 +1704,7 @@
       list = list.filter((n) => {
         const v = getVenture(n.ventureId);
         const blob = [
-          n.title, n.summary, n.useInBusiness, n.youtubeUrl, (n.tags || []).join(" "),
+          n.title, n.summary, n.useInBusiness, n.youtubeUrl, n.sourceFile, (n.tags || []).join(" "),
           v ? v.name : "", (n.howToSteps || []).map((s) => s.text).join(" ")
         ].join("\n").toLowerCase();
         return blob.indexOf(q) !== -1;
@@ -1400,6 +1801,7 @@
           useInBusiness: note.useInBusiness || "",
           ventureId: note.ventureId || "",
           tags: (note.tags || []).join(", "),
+          sourceFile: note.sourceFile || "",
           savedAt: draft && draft.editingId === note.id ? draft.savedAt : ""
         };
         vnFormSteps = copySteps(note.howToSteps);
@@ -1408,7 +1810,7 @@
       values = draft;
       vnFormSteps = copySteps(draft.howToSteps);
     } else {
-      values = { title: "", youtubeUrl: "", summary: "", useInBusiness: "", ventureId: "", tags: "" };
+      values = { title: "", youtubeUrl: "", summary: "", useInBusiness: "", ventureId: "", tags: "", sourceFile: "" };
       vnFormSteps = [];
     }
     vnEditingStep = "";
@@ -1419,7 +1821,8 @@
 
     return '<div class="page-head"><p class="kicker"><a href="#/video-notes">Video notes</a></p><h1>' +
       (note ? "Edit video note" : "New video note") + "</h1>" +
-      '<p class="lead">Paste the video summary, then write how you will use it and the steps to do it.</p></div>' +
+      '<p class="lead">Paste the video summary, or import a PDF, Word, or Excel file, then write how you will use it and the steps to do it.</p></div>' +
+      importBoxHtml() +
       '<form class="card" data-action="save-video-note" data-id="' + (note ? esc(note.id) : "") + '">' +
       '<div class="field"><label><span>YouTube link (optional)</span>' +
       '<input name="youtubeUrl" type="url" maxlength="500" value="' + esc(values.youtubeUrl || "") + '" placeholder="https://www.youtube.com/watch?v=…" data-action="vn-url"></label></div>' +
@@ -1427,6 +1830,10 @@
       youtubePreviewHtml(values.youtubeUrl, values.title) +
       '<div class="field"><label><span>Video title</span>' +
       '<input name="title" type="text" maxlength="200" value="' + esc(values.title || "") + '" placeholder="The name of the video is fine"></label></div>' +
+      '<div class="field" id="vnSourceField"' + (values.sourceFile ? "" : " hidden") + '><label><span>Source file</span>' +
+      '<input name="sourceFile" type="text" maxlength="200" value="' + esc(values.sourceFile || "") + '" readonly></label>' +
+      '<p class="tiny">The file name is kept with the note. The file itself is not stored or uploaded.</p>' +
+      '<button type="button" class="btn" data-action="vn-clear-source">Remove file name</button></div>' +
       '<div class="field"><label><span>Video summary</span>' +
       '<textarea name="summary" class="tall" maxlength="' + VN_SUMMARY_MAX + '" placeholder="Paste the video’s summary here">' + esc(values.summary || "") + "</textarea></label></div>" +
       '<p class="row"><button type="button" class="btn" data-action="paste-vn-summary">Paste</button></p>' +
@@ -1537,7 +1944,7 @@
     const p = howtoProgress(note.howToSteps);
     const tags = (note.tags || []).map((t) => '<span class="badge">' + esc(t) + "</span>").join(" ");
     let html = '<div class="page-head"><p class="kicker"><a href="#/video-notes">Video notes</a></p><h1>' + esc(note.title || "Video note") + "</h1>" +
-      '<p class="tiny">Updated ' + esc(formatWhen(note.updatedAt)) + (v ? " · Linked to <a href=\"#/ideas/" + esc(v.id) + "\">" + esc(v.name) + "</a>" : "") + "</p></div>" +
+      '<p class="tiny">Updated ' + esc(formatWhen(note.updatedAt)) + (v ? " · Linked to <a href=\"#/ideas/" + esc(v.id) + "\">" + esc(v.name) + "</a>" : "") +      (note.sourceFile ? " · Source file: " + esc(note.sourceFile) : "") + "</p></div>" +
       '<p class="row no-print"><a class="btn primary" href="#/video-notes/' + esc(note.id) + '/edit">Edit</a>' +
       '<button type="button" class="btn" data-action="vn-copy" data-id="' + esc(note.id) + '">Copy to clipboard</button>' +
       '<button type="button" class="btn" data-action="vn-share" data-id="' + esc(note.id) + '">Share</button>' +
@@ -1583,7 +1990,7 @@
     const href = n.youtubeUrl || (id ? youtubeWatchUrl(id) : "");
     let html = '<article class="card print-note">';
     if (showTitle) html += "<h2>" + esc(n.title || "Video note") + "</h2>";
-    html += '<p class="tiny">Updated ' + esc(formatWhen(n.updatedAt)) + (v ? " · Linked to " + esc(v.name) : "") + "</p>";
+    html += '<p class="tiny">Updated ' + esc(formatWhen(n.updatedAt)) + (v ? " · Linked to " + esc(v.name) : "") +      (n.sourceFile ? " · Source file: " + esc(n.sourceFile) : "") + "</p>";
     if (href) {
       html += '<p><strong>Video:</strong> <a href="' + esc(href) + '" target="_blank" rel="noopener noreferrer">' +
         esc(n.title || href) + "</a></p>";
@@ -1616,6 +2023,7 @@
     const lines = [];
     lines.push(note.title || "Video note");
     if (note.youtubeUrl) lines.push("Video: " + note.youtubeUrl);
+    if (note.sourceFile) lines.push("Source file: " + note.sourceFile);
     if (v) lines.push("Linked to: " + v.name);
     if ((note.tags || []).length) lines.push("Tags: " + note.tags.join(", "));
     lines.push("");
@@ -1706,6 +2114,7 @@
       useInBusiness: String(fields.useInBusiness || "").trim(),
       ventureId: fields.ventureId || "",
       tags: fields.tags || [],
+      sourceFile: String(fields.sourceFile || "").trim(),
       howToSteps: copySteps(fields.howToSteps),
       createdAt: nowISO(),
       updatedAt: nowISO()
@@ -1851,6 +2260,7 @@
             useInBusiness: String(n.useInBusiness || "").slice(0, VN_USE_MAX),
             ventureId: (n.ventureId && getVenture(n.ventureId)) ? n.ventureId : "",
             tags: parseTags(Array.isArray(n.tags) ? n.tags.join(", ") : n.tags),
+            sourceFile: String(n.sourceFile || "").trim().slice(0, 200),
             howToSteps: copySteps(n.howToSteps || n.steps || []).map((s) => {
               s.text = s.text.slice(0, VN_STEP_MAX);
               return s;
@@ -1883,6 +2293,7 @@
     document.querySelectorAll("img.yt-thumb").forEach((img) => {
       img.addEventListener("error", function () { this.hidden = true; });
     });
+    bindVnImportUi();
     const add = document.getElementById("howtoAdd");
     if (add) {
       add.addEventListener("keydown", function (e) {
@@ -1903,7 +2314,7 @@
       '<div class="card"><p>Business SuccessHQ is an original planning tool. You can use it with any business idea. It helps you capture ideas, score them, validate them, write a plan, follow official checklists, and track goals, habits, and numbers you enter yourself.</p>' +
       "<p>It is not affiliated with The Success Playbook YouTube channel (@successplaybookhq), or with any other company, show, or website that uses a similar name. It is not a copy of another product. The Ideas section includes a collection summarized from that channel's public videos; ideas you add from it are copies you can score yourself.</p>" +
       "<p>This app does not give legal, tax, financial, or trading advice. It does not place trades or file forms for you. Official links go to government sites, which can change.</p>" +
-      "<p>Your information is stored only on this device, in this browser. It is not sent to a server. Video notes, including pasted summaries and step-by-step instructions, stay on this device too. If you use more than one device, use Export and Import to move a backup yourself. Video notes also have their own export and import.</p>" +
+      "<p>Your information is stored only on this device, in this browser. It is not sent to a server. Video notes, including pasted summaries, imported PDF, Word, or Excel text, and step-by-step instructions, stay on this device. Files you import are read on this device and are not uploaded. If you use more than one device, use Export and Import to move a backup yourself. Video notes also have their own export and import.</p>" +
       "<p>Do not enter Social Security numbers, full Employer Identification Numbers, bank or card numbers, passwords, or other sensitive personal data.</p></div>" +
       '<div class="card" style="margin-top:16px"><h2>Backup</h2>' +
       "<p>Download a copy of your data, or replace the data on this device with a backup file.</p>" +
@@ -2006,6 +2417,21 @@
   }
 
   function handleVideoNoteClick(btn, action) {
+    if (action === "vn-import-file") {
+      const input = document.getElementById("vnFileInput");
+      if (input) input.click();
+      return true;
+    }
+    if (action === "vn-import-apply") { applyVnImport(); return true; }
+    if (action === "vn-import-clear") { clearVnImport(); return true; }
+    if (action === "vn-clear-source") {
+      const form = vnFormEl();
+      if (form && form.sourceFile) form.sourceFile.value = "";
+      const wrap = document.getElementById("vnSourceField");
+      if (wrap) wrap.hidden = true;
+      persistVnDraftFromForm();
+      return true;
+    }
     if (action === "paste-vn-url") {
       const form = vnFormEl();
       pasteIntoField(form && form.youtubeUrl, function () {
@@ -2147,6 +2573,7 @@
         useInBusiness: useInBusiness,
         ventureId: String(fd.get("ventureId") || ""),
         tags: tags,
+        sourceFile: String(fd.get("sourceFile") || "").trim(),
         howToSteps: copySteps(vnFormSteps)
       };
       const id = form.getAttribute("data-id");
@@ -2408,6 +2835,10 @@
         importVideoNotesFile(el.files[0]);
         el.value = "";
       }
+      if (el.id === "vnFileInput" && el.files && el.files[0]) {
+        importNoteFile(el.files[0]);
+        el.value = "";
+      }
       if (el.name === "when") {
         const box = document.getElementById("customDays");
         if (box) box.hidden = el.value !== "custom";
@@ -2503,6 +2934,10 @@
     }
     if (action === "toggle-howto") {
       toggleHowto(el.getAttribute("data-id"), el.checked);
+      return;
+    }
+    if (action === "vn-import-sheet") {
+      changeImportSheet(el.value);
     }
   }
 

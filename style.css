@@ -839,3 +839,41 @@ textarea.tall { min-height: 180px; }
   a { color: #000; text-decoration: none; }
   .yt-thumb { width: 200px; height: 112px; }
 }
+
+/* Video note file import */
+.vn-import { margin-bottom: 16px; }
+.vn-drop {
+  margin-top: 8px;
+  padding: 22px 16px;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+.vn-import.dragover .vn-drop, .vn-drop.dragover {
+  border-color: var(--gold);
+  color: var(--ink);
+  background: var(--gold-soft);
+}
+.vn-preview { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.vn-preview-text {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+.vn-dest {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px 10px;
+  margin: 12px 0;
+}
+.vn-dest legend { padding: 0 6px; font-weight: 650; }
+.vn-dest label { display: block; margin: 6px 0; }
