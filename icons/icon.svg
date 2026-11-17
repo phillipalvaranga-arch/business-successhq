@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Business SuccessHQ">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e2444"/>
+      <stop offset="1" stop-color="#071224"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2d878"/>
+      <stop offset="1" stop-color="#c9a227"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <path d="M120 150h210c8 0 16 8 14 20L320 270h-90L206 170c-2-12 6-20 14-20z" fill="url(#gold)"/>
+  <rect x="200" y="148" width="230" height="28" rx="10" fill="#f2d878"/>
+  <path d="M152 200c-40 10-58 70-18 110" fill="none" stroke="#d6ae36" stroke-width="16"/>
+  <path d="M298 200c40 10 58 70 18 110" fill="none" stroke="#d6ae36" stroke-width="16"/>
+  <rect x="214" y="270" width="36" height="90" rx="6" fill="url(#gold)"/>
+  <rect x="170" y="350" width="124" height="36" rx="8" fill="#f2d878"/>
+  <path d="M390 110 L460 210 H420 V390 H360 V210 H320 Z" fill="url(#gold)"/>
+</svg>

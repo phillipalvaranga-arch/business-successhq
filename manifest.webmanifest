@@ -1,0 +1,16 @@
+{
+  "name": "Business SuccessHQ",
+  "short_name": "SuccessHQ",
+  "description": "Capture any business idea, score it, validate it, plan it, and track your progress. Your information stays on this device.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0B1F3A",
+  "theme_color": "#0B1F3A",
+  "icons": [
+    {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
