@@ -15,11 +15,17 @@
     { id: "playbooks", href: "#/playbooks", label: "Playbooks", group: "Guides", ico: "B" },
     { id: "library", href: "#/library", label: "Library", group: "Guides", ico: "L" },
     { id: "notes", href: "#/notes", label: "Notes", group: "Guides", ico: "T" },
+    { id: "video-notes", href: "#/video-notes", label: "Video notes", group: "Guides", ico: "V" },
     { id: "about", href: "#/about", label: "About", group: "More", ico: "A" }
   ];
 
   let state = load();
   let ideasFilter = "all";
+  let vnSearch = "";
+  let vnTag = "";
+  let vnVenture = "";
+  let vnFormSteps = [];
+  let vnEditingStep = "";
   let toastTimer = 0;
 
   function uid() {
@@ -42,6 +48,7 @@
       habitLogs: {},
       kpis: [],
       notes: [],
+      videoNotes: [],
       playbookProgress: {},
       filters: {}
     };
@@ -436,6 +443,10 @@
       body += startersBox();
     }
 
+    body += '<div class="card accent" style="margin-top:20px"><h2>Video notes</h2>' +
+      "<p>Paste a YouTube video summary, write how you will use it in your business, and keep step-by-step instructions you can check off.</p>" +
+      '<p class="row"><a class="btn" href="#/video-notes">Open video notes</a><a class="btn" href="#/video-notes/new">Add a video note</a></p></div>';
+
     if (habitsToday.length) {
       body += '<div class="card" style="margin-top:20px"><div class="spread"><h2>Today\'s habits</h2><a href="#/habits">See all</a></div>' +
         habitsToday.map((h) => habitRow(h, today)).join("") + "</div>";
@@ -589,6 +600,7 @@
       linkCard("Set goals", "Milestones for this idea or business.", "#/goals?venture=" + encodeURIComponent(v.id)) +
       linkCard("Track numbers", "Enter figures you actually have. This app does not fetch sales or bank data.", "#/numbers?venture=" + encodeURIComponent(v.id)) +
       linkCard("Open playbooks", "Official checklists you can attach to this idea.", "#/playbooks?venture=" + encodeURIComponent(v.id)) +
+      linkCard("Video notes", "Paste a video summary and the steps for using it in this idea.", "#/video-notes?venture=" + encodeURIComponent(v.id)) +
       "</div>" +
       '<p class="tiny" style="margin-top:18px">Do not enter Social Security numbers, full Employer Identification Numbers, bank or card numbers, or passwords in this app.</p>' +
       '<p><button type="button" class="btn danger" data-action="delete-venture" data-id="' + esc(v.id) + '">Delete this item</button></p>';
@@ -1091,12 +1103,807 @@
     return html;
   }
 
+  const VN_DRAFT_KEY = "bizhq-video-note-draft";
+  const VN_SUMMARY_MAX = 20000;
+  const VN_USE_MAX = 8000;
+  const VN_STEP_MAX = 500;
+
+  function getVideoNote(id) {
+    return (state.videoNotes || []).find((n) => n.id === id) || null;
+  }
+
+  function copySteps(steps) {
+    return (steps || []).map((s) => ({
+      id: s.id || uid(),
+      text: String(s.text || "").trim(),
+      done: !!s.done
+    })).filter((s) => s.text);
+  }
+
+  function parseYouTubeId(url) {
+    const raw = String(url || "").trim();
+    if (!raw) return "";
+    let u;
+    try { u = new URL(raw); } catch (e) { return ""; }
+    const host = u.hostname.replace(/^www\./, "").replace(/^m\./, "").toLowerCase();
+    let id = "";
+    if (host === "youtu.be") {
+      id = (u.pathname.split("/").filter(Boolean)[0] || "").split("&")[0];
+    } else if (host === "youtube.com" || host === "youtube-nocookie.com" || host.endsWith(".youtube.com")) {
+      if (u.searchParams.get("v")) id = u.searchParams.get("v");
+      else {
+        const parts = u.pathname.split("/").filter(Boolean);
+        if (parts[0] === "embed" || parts[0] === "shorts" || parts[0] === "live" || parts[0] === "v") {
+          id = parts[1] || "";
+        }
+      }
+    }
+    id = String(id || "").trim();
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : "";
+  }
+
+  function youtubeWatchUrl(id) {
+    return "https://www.youtube.com/watch?v=" + id;
+  }
+
+  function youtubePreviewHtml(url, title) {
+    const id = parseYouTubeId(url);
+    const typed = String(url || "").trim();
+    if (!typed) return '<div class="yt-preview" id="ytPreview" hidden></div>';
+    if (!id) {
+      return '<div class="yt-preview" id="ytPreview"><p class="help">That does not look like a YouTube link. You can still save the note, or paste a youtube.com or youtu.be link.</p></div>';
+    }
+    const href = youtubeWatchUrl(id);
+    const label = title ? title : "Open this video on YouTube";
+    return '<div class="yt-preview" id="ytPreview">' +
+      '<a class="yt-card" href="' + esc(href) + '" target="_blank" rel="noopener noreferrer">' +
+      '<img class="yt-thumb" src="https://i.ytimg.com/vi/' + esc(id) + '/hqdefault.jpg" width="240" height="135" alt="Thumbnail for this YouTube video">' +
+      "<span>" + esc(label) + "</span></a></div>";
+  }
+
+  function splitSteps(text) {
+    const raw = String(text || "").replace(/\r\n/g, "\n").trim();
+    if (!raw) return [];
+    const mark = "(?:(?:step\\s*(?:#|no\\.?|number)?\\s*)?\\d+\\s*(?:[.)\\]:]\\s*|\\s*[-\\u2013]\\s+))";
+    const lineStart = new RegExp("^\\s*" + mark, "i");
+    const lines = raw.split("\n");
+    const numberedLines = lines.filter((l) => lineStart.test(l)).length;
+    const markCount = (raw.match(new RegExp(mark, "gi")) || []).length;
+    if (numberedLines >= 2 || markCount >= 2 || (markCount === 1 && numberedLines === 1)) {
+      let parts = raw.split(new RegExp(mark, "gi")).map((s) => s.replace(/\s+/g, " ").trim()).filter(Boolean);
+      if (!lineStart.test(raw) && parts.length >= 3) parts = parts.slice(1);
+      if (parts.length) return parts;
+    }
+    if ((raw.match(/(?:^|\n)\s*[-*•]\s+/g) || []).length >= 2 || /^\s*[-*•]\s+/.test(raw)) {
+      const parts = raw.split(/(?:^|\n)\s*[-*•]\s+/).map((s) => s.replace(/\s+/g, " ").trim()).filter(Boolean);
+      if (parts.length) return parts;
+    }
+    return raw.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  }
+
+  function howtoProgress(steps) {
+    const list = steps || [];
+    const total = list.length;
+    const done = list.filter((s) => s.done).length;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    return { done, total, pct };
+  }
+
+  function parseTags(s) {
+    const seen = {};
+    const out = [];
+    String(s || "").split(/[,;]/).forEach((t) => {
+      const tag = t.trim().slice(0, 40);
+      if (!tag) return;
+      const key = tag.toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push(tag);
+    });
+    return out.slice(0, 20);
+  }
+
+  function allVideoTags() {
+    const map = {};
+    (state.videoNotes || []).forEach((n) => {
+      (n.tags || []).forEach((t) => { map[t.toLowerCase()] = t; });
+    });
+    return Object.keys(map).sort().map((k) => map[k]);
+  }
+
+  function formatWhen(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short", day: "numeric", year: "numeric",
+      hour: "numeric", minute: "2-digit", timeZone: TZ, timeZoneName: "short"
+    }).format(d);
+  }
+
+  function loadVnDraft() {
+    try {
+      const raw = localStorage.getItem(VN_DRAFT_KEY);
+      if (!raw) return null;
+      const d = JSON.parse(raw);
+      return d && typeof d === "object" ? d : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveVnDraft(data) {
+    try {
+      const rec = Object.assign({}, data, { savedAt: nowISO() });
+      localStorage.setItem(VN_DRAFT_KEY, JSON.stringify(rec));
+    } catch (e) {}
+  }
+
+  function clearVnDraft() {
+    try { localStorage.removeItem(VN_DRAFT_KEY); } catch (e) {}
+  }
+
+  function vnFormEl() {
+    return document.querySelector('form[data-action="save-video-note"]');
+  }
+
+  function collectVnForm() {
+    const form = vnFormEl();
+    if (!form) return null;
+    return {
+      editingId: form.getAttribute("data-id") || "",
+      title: form.title ? form.title.value : "",
+      youtubeUrl: form.youtubeUrl ? form.youtubeUrl.value : "",
+      summary: form.summary ? form.summary.value : "",
+      useInBusiness: form.useInBusiness ? form.useInBusiness.value : "",
+      ventureId: form.ventureId ? form.ventureId.value : "",
+      tags: form.tags ? form.tags.value : "",
+      howToSteps: copySteps(vnFormSteps)
+    };
+  }
+
+  function persistVnDraftFromForm() {
+    const data = collectVnForm();
+    if (!data) return;
+    const has = String(data.title || "").trim() || String(data.youtubeUrl || "").trim() ||
+      String(data.summary || "").trim() || String(data.useInBusiness || "").trim() ||
+      (data.howToSteps && data.howToSteps.length) || String(data.tags || "").trim() || data.ventureId;
+    if (!has) {
+      clearVnDraft();
+      const hint = document.getElementById("vnDraftHint");
+      if (hint) hint.textContent = "";
+      return;
+    }
+    saveVnDraft(data);
+    const hint = document.getElementById("vnDraftHint");
+    if (hint) hint.textContent = "Draft saved on this device · " + formatWhen(data.savedAt || nowISO());
+  }
+
+  function charCountHtml(id, value, max) {
+    const n = String(value || "").length;
+    return '<p class="char-count" id="' + id + '">' + formatViews(n) + " of " + formatViews(max) + " characters</p>";
+  }
+
+  function updateCharCount(field, countId, max) {
+    const el = document.getElementById(countId);
+    if (!el || !field) return;
+    el.textContent = formatViews(field.value.length) + " of " + formatViews(max) + " characters";
+  }
+
+  function filteredVideoNotes() {
+    let list = (state.videoNotes || []).slice().sort((a, b) =>
+      String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    if (vnVenture) list = list.filter((n) => n.ventureId === vnVenture);
+    if (vnTag) {
+      const want = vnTag.toLowerCase();
+      list = list.filter((n) => (n.tags || []).some((t) => t.toLowerCase() === want));
+    }
+    const q = vnSearch.trim().toLowerCase();
+    if (q) {
+      list = list.filter((n) => {
+        const v = getVenture(n.ventureId);
+        const blob = [
+          n.title, n.summary, n.useInBusiness, n.youtubeUrl, (n.tags || []).join(" "),
+          v ? v.name : "", (n.howToSteps || []).map((s) => s.text).join(" ")
+        ].join("\n").toLowerCase();
+        return blob.indexOf(q) !== -1;
+      });
+    }
+    return list;
+  }
+
+  function viewVideoNotes() {
+    const r = parseRoute();
+    if (r.parts[1] === "new") return viewVideoNoteForm(null);
+    if (r.parts[1] === "print") return viewVideoNotesPrint(null);
+    if (r.parts[1]) {
+      const note = getVideoNote(r.parts[1]);
+      if (!note) return notFound("That video note was not found.");
+      if (r.parts[2] === "edit") return viewVideoNoteForm(note);
+      if (r.parts[2] === "print") return viewVideoNotesPrint(note);
+      return viewVideoNote(note);
+    }
+
+    vnVenture = r.query.venture || "";
+    vnTag = r.query.tag || "";
+
+    const list = filteredVideoNotes();
+    const tags = allVideoTags();
+    const draft = loadVnDraft();
+    let html = '<div class="page-head"><p class="kicker">Video notes</p><h1>Video notes</h1>' +
+      '<p class="lead">Paste a YouTube video summary, then write how you could use it in your business and the steps to do it. Everything stays on this device.</p>' +
+      '<p class="notice warning">Do not enter Social Security numbers, full Employer Identification Numbers, bank or card numbers, passwords, or other sensitive personal data.</p></div>' +
+      '<p class="row"><a class="btn primary" href="#/video-notes/new">Add a video note</a>' +
+      (draft ? '<a class="btn" href="#/video-notes/' + (draft.editingId ? esc(draft.editingId) + "/edit" : "new") + '">Continue draft</a>' : "") +
+      "</p>";
+
+    html += '<div class="card vn-toolbar">' +
+      '<div class="field"><label><span>Search</span><input type="search" value="' + esc(vnSearch) + '" data-action="vn-search" placeholder="Search titles, summaries, steps, or tags"></label></div>' +
+      '<div class="grid grid-2">' +
+      '<div class="field"><label><span>Filter by linked idea</span><select data-action="vn-filter-venture">' +
+      '<option value=""' + (!vnVenture ? " selected" : "") + ">All ideas and businesses</option>" +
+      ventureSelect(vnVenture, { allowNone: false }) +
+      "</select></label></div>" +
+      '<div class="field"><label><span>Filter by tag</span><select data-action="vn-filter-tag">' +
+      '<option value=""' + (!vnTag ? " selected" : "") + ">All tags</option>" +
+      tags.map((t) => '<option value="' + esc(t) + '"' + (vnTag.toLowerCase() === t.toLowerCase() ? " selected" : "") + ">" + esc(t) + "</option>").join("") +
+      "</select></label></div></div>" +
+      '<p class="row"><button type="button" class="btn" data-action="vn-export">Export notes</button>' +
+      '<button type="button" class="btn" data-action="vn-import">Import notes</button>' +
+      '<a class="btn" href="#/video-notes/print">Print or share view</a></p>' +
+      '<input id="vnImportFile" type="file" accept="application/json,.json" hidden></div>';
+
+    html += '<div id="vnList">' + videoNotesListHtml(list) + "</div>";
+    return html;
+  }
+
+  function videoNotesListHtml(list) {
+    if (!list.length) {
+      return '<div class="empty" style="margin-top:16px"><h2>No video notes yet</h2><p>Add a note and paste a video summary to get started, or change the search or filters.</p></div>';
+    }
+    return '<div class="list" style="margin-top:16px">' + list.map(videoNoteCard).join("") + "</div>";
+  }
+
+  function refreshVideoNotesList() {
+    const box = document.getElementById("vnList");
+    if (box) box.innerHTML = videoNotesListHtml(filteredVideoNotes());
+  }
+
+  function videoNoteCard(n) {
+    const v = getVenture(n.ventureId);
+    const p = howtoProgress(n.howToSteps);
+    const snippet = String(n.summary || n.useInBusiness || "").replace(/\s+/g, " ").trim();
+    const tags = (n.tags || []).map((t) => '<span class="badge">' + esc(t) + "</span>").join(" ");
+    return '<a class="card idea-card accent vn-card" href="#/video-notes/' + esc(n.id) + '">' +
+      '<div class="spread"><span class="title">' + esc(n.title || "Video note") + "</span>" +
+      '<span class="tiny">' + esc(formatWhen(n.updatedAt)) + "</span></div>" +
+      (v ? '<p class="tiny">Linked to ' + esc(v.name) + "</p>" : "") +
+      (snippet ? "<p class=\"tiny\">" + esc(snippet.slice(0, 180)) + (snippet.length > 180 ? "…" : "") + "</p>" : "") +
+      (tags ? '<p class="vn-tags">' + tags + "</p>" : "") +
+      (p.total ? '<div class="tiny">How to do it: ' + p.done + " of " + p.total + " steps done</div>" +
+        '<div class="progress" aria-hidden="true"><span style="width:' + p.pct + '%"></span></div>' : "") +
+      "</a>";
+  }
+
+  function viewVideoNoteForm(note) {
+    const draft = loadVnDraft();
+    let values;
+    if (note) {
+      if (draft && draft.editingId === note.id) {
+        values = draft;
+        vnFormSteps = copySteps(draft.howToSteps);
+      } else {
+        values = {
+          title: note.title || "",
+          youtubeUrl: note.youtubeUrl || "",
+          summary: note.summary || "",
+          useInBusiness: note.useInBusiness || "",
+          ventureId: note.ventureId || "",
+          tags: (note.tags || []).join(", "),
+          savedAt: draft && draft.editingId === note.id ? draft.savedAt : ""
+        };
+        vnFormSteps = copySteps(note.howToSteps);
+      }
+    } else if (draft && !draft.editingId) {
+      values = draft;
+      vnFormSteps = copySteps(draft.howToSteps);
+    } else {
+      values = { title: "", youtubeUrl: "", summary: "", useInBusiness: "", ventureId: "", tags: "" };
+      vnFormSteps = [];
+    }
+    vnEditingStep = "";
+
+    const draftHint = (draft && ((note && draft.editingId === note.id) || (!note && !draft.editingId)) && draft.savedAt)
+      ? "Draft saved on this device · " + formatWhen(draft.savedAt)
+      : "";
+
+    return '<div class="page-head"><p class="kicker"><a href="#/video-notes">Video notes</a></p><h1>' +
+      (note ? "Edit video note" : "New video note") + "</h1>" +
+      '<p class="lead">Paste the video summary, then write how you will use it and the steps to do it.</p></div>' +
+      '<form class="card" data-action="save-video-note" data-id="' + (note ? esc(note.id) : "") + '">' +
+      '<div class="field"><label><span>YouTube link (optional)</span>' +
+      '<input name="youtubeUrl" type="url" maxlength="500" value="' + esc(values.youtubeUrl || "") + '" placeholder="https://www.youtube.com/watch?v=…" data-action="vn-url"></label></div>' +
+      '<p class="row"><button type="button" class="btn" data-action="paste-vn-url">Paste link</button></p>' +
+      youtubePreviewHtml(values.youtubeUrl, values.title) +
+      '<div class="field"><label><span>Video title</span>' +
+      '<input name="title" type="text" maxlength="200" value="' + esc(values.title || "") + '" placeholder="The name of the video is fine"></label></div>' +
+      '<div class="field"><label><span>Video summary</span>' +
+      '<textarea name="summary" class="tall" maxlength="' + VN_SUMMARY_MAX + '" placeholder="Paste the video’s summary here">' + esc(values.summary || "") + "</textarea></label></div>" +
+      '<p class="row"><button type="button" class="btn" data-action="paste-vn-summary">Paste</button></p>' +
+      charCountHtml("vnSummaryCount", values.summary, VN_SUMMARY_MAX) +
+      '<div class="field"><label><span>How I’ll use this in my business</span>' +
+      '<textarea name="useInBusiness" class="tall" maxlength="' + VN_USE_MAX + '" placeholder="In your own words, how this could apply to a business you have or want to start">' + esc(values.useInBusiness || "") + "</textarea></label></div>" +
+      '<p class="row"><button type="button" class="btn" data-action="paste-vn-use">Paste</button></p>' +
+      charCountHtml("vnUseCount", values.useInBusiness, VN_USE_MAX) +
+      '<div class="field"><label><span>Tie it to one of your ideas (optional)</span>' +
+      "<select name=\"ventureId\">" + ventureSelect(values.ventureId || "") + "</select></label></div>" +
+      '<div class="field"><label><span>Tags (optional, comma-separated)</span>' +
+      '<input name="tags" type="text" maxlength="200" value="' + esc(values.tags || "") + '" placeholder="For example: pricing, marketing"></label></div>' +
+      '<div id="howtoBlock">' + howtoEditorHtml(vnFormSteps, { form: true }) + "</div>" +
+      '<p class="tiny" id="vnDraftHint">' + esc(draftHint) + "</p>" +
+      '<p class="row"><button type="submit" class="btn primary">Save video note</button>' +
+      '<a class="btn ghost" href="' + (note ? "#/video-notes/" + esc(note.id) : "#/video-notes") + '">Cancel</a>' +
+      (draft && ((note && draft.editingId === note.id) || (!note && !draft.editingId))
+        ? '<button type="button" class="btn" data-action="vn-discard-draft">Discard draft</button>' : "") +
+      "</p></form>";
+  }
+
+  function howtoEditorHtml(steps, opts) {
+    opts = opts || {};
+    const p = howtoProgress(steps);
+    const canCheck = !opts.form;
+    let html = '<section class="howto card accent" id="howtoSection">' +
+      '<div class="spread"><h2>How to do it: step-by-step instructions</h2>' +
+      (p.total ? '<span class="badge ok" id="howtoProgressLabel">' + p.done + " of " + p.total + " done</span>" : '<span class="badge" id="howtoProgressLabel">No steps yet</span>') +
+      "</div>" +
+      '<p class="help">This is the main checklist for the note. Paste a list and we will turn it into numbered steps. You can use one step per line, or numbering like 1. or Step 1.</p>' +
+      '<div class="progress" id="howtoProgressBar" aria-hidden="true"><span style="width:' + p.pct + '%"></span></div>' +
+      '<ol class="howto-list" id="howtoList">';
+    if (!steps.length) {
+      html += '<li class="tiny muted" id="howtoEmpty">No steps yet. Paste a block or add one step below.</li>';
+    } else {
+      steps.forEach((s, i) => { html += howtoItemHtml(s, i, canCheck); });
+    }
+    html += "</ol>";
+    html += '<div class="field" style="margin-top:14px"><label><span>Paste a block of steps</span>' +
+      '<textarea id="howtoPaste" class="tall" maxlength="20000" placeholder="1. First step&#10;2. Second step&#10;Or one step on each line"></textarea></label></div>' +
+      '<p class="row"><button type="button" class="btn" data-action="paste-howto">Paste</button>' +
+      '<button type="button" class="btn primary" data-action="split-howto">Add these steps</button></p>' +
+      '<div class="row howto-add">' +
+      '<input id="howtoAdd" type="text" maxlength="' + VN_STEP_MAX + '" placeholder="Add one step">' +
+      '<button type="button" class="btn" data-action="add-howto">Add step</button></div>' +
+      "</section>";
+    return html;
+  }
+
+  function howtoItemHtml(s, i, canCheck) {
+    const editing = vnEditingStep === s.id;
+    let body;
+    if (editing) {
+      body = '<div class="howto-edit"><input id="howtoEditInput" type="text" maxlength="' + VN_STEP_MAX + '" value="' + esc(s.text) + '">' +
+        '<button type="button" class="btn primary" data-action="howto-save-edit" data-id="' + esc(s.id) + '">Save</button>' +
+        '<button type="button" class="btn" data-action="howto-cancel-edit">Cancel</button></div>';
+    } else if (canCheck) {
+      body = '<label class="howto-check"><input type="checkbox" data-action="toggle-howto" data-id="' + esc(s.id) + '"' +
+        (s.done ? " checked" : "") + '><span' + (s.done ? ' class="done"' : "") + ">" + esc(s.text) + "</span></label>";
+    } else {
+      body = '<div class="howto-text">' + (i + 1) + ". " + esc(s.text) + "</div>";
+    }
+    return '<li class="howto-item" data-id="' + esc(s.id) + '">' + body +
+      '<div class="howto-tools no-print">' +
+      '<button type="button" class="btn" data-action="howto-up" data-id="' + esc(s.id) + '" aria-label="Move step up">Up</button>' +
+      '<button type="button" class="btn" data-action="howto-down" data-id="' + esc(s.id) + '" aria-label="Move step down">Down</button>' +
+      (editing ? "" : '<button type="button" class="btn" data-action="howto-edit" data-id="' + esc(s.id) + '">Edit</button>') +
+      '<button type="button" class="btn danger" data-action="howto-del" data-id="' + esc(s.id) + '">Delete</button>' +
+      "</div></li>";
+  }
+
+  function currentHowtoContext() {
+    const form = vnFormEl();
+    if (form) return { mode: "form", steps: vnFormSteps, note: null };
+    const r = parseRoute();
+    if (r.name === "video-notes" && r.parts[1] && r.parts[1] !== "new" && r.parts[1] !== "print") {
+      const note = getVideoNote(r.parts[1]);
+      if (note) return { mode: "note", steps: note.howToSteps || (note.howToSteps = []), note: note };
+    }
+    return { mode: "form", steps: vnFormSteps, note: null };
+  }
+
+  function refreshHowtoBlock() {
+    const ctx = currentHowtoContext();
+    const block = document.getElementById("howtoBlock") || document.getElementById("howtoSection");
+    if (!block) return;
+    const html = howtoEditorHtml(ctx.steps, { form: ctx.mode === "form" });
+    if (block.id === "howtoBlock") block.innerHTML = html;
+    else block.outerHTML = html;
+    const edit = document.getElementById("howtoEditInput");
+    if (edit) { edit.focus(); edit.select(); }
+  }
+
+  function commitHowtoSteps(steps) {
+    const ctx = currentHowtoContext();
+    if (ctx.mode === "form") {
+      vnFormSteps = steps;
+      persistVnDraftFromForm();
+    } else if (ctx.note) {
+      ctx.note.howToSteps = steps;
+      touch(ctx.note); save();
+    }
+    refreshHowtoBlock();
+  }
+
+  function viewVideoNote(note) {
+    const v = getVenture(note.ventureId);
+    const p = howtoProgress(note.howToSteps);
+    const tags = (note.tags || []).map((t) => '<span class="badge">' + esc(t) + "</span>").join(" ");
+    let html = '<div class="page-head"><p class="kicker"><a href="#/video-notes">Video notes</a></p><h1>' + esc(note.title || "Video note") + "</h1>" +
+      '<p class="tiny">Updated ' + esc(formatWhen(note.updatedAt)) + (v ? " · Linked to <a href=\"#/ideas/" + esc(v.id) + "\">" + esc(v.name) + "</a>" : "") + "</p></div>" +
+      '<p class="row no-print"><a class="btn primary" href="#/video-notes/' + esc(note.id) + '/edit">Edit</a>' +
+      '<button type="button" class="btn" data-action="vn-copy" data-id="' + esc(note.id) + '">Copy to clipboard</button>' +
+      '<button type="button" class="btn" data-action="vn-share" data-id="' + esc(note.id) + '">Share</button>' +
+      '<a class="btn" href="#/video-notes/' + esc(note.id) + '/print">Print view</a>' +
+      '<button type="button" class="btn danger" data-action="delete-video-note" data-id="' + esc(note.id) + '">Delete</button></p>';
+
+    if (note.youtubeUrl || note.videoId) {
+      html += '<div class="card">' + youtubePreviewHtml(note.youtubeUrl || (note.videoId ? youtubeWatchUrl(note.videoId) : ""), note.title) + "</div>";
+    }
+    html += '<div class="card" style="margin-top:16px"><h2>Video summary</h2>' +
+      (note.summary ? "<p class=\"vn-body\">" + esc(note.summary).replace(/\n/g, "<br>") + "</p>" : "<p class=\"muted\">No summary pasted yet.</p>") +
+      "</div>";
+    html += '<div class="card" style="margin-top:16px"><h2>How I’ll use this in my business</h2>' +
+      (note.useInBusiness ? "<p class=\"vn-body\">" + esc(note.useInBusiness).replace(/\n/g, "<br>") + "</p>" : "<p class=\"muted\">Nothing written yet.</p>") +
+      "</div>";
+    html += '<div id="howtoBlock" style="margin-top:16px">' + howtoEditorHtml(note.howToSteps || [], { form: false }) + "</div>";
+    if (tags) html += '<p class="vn-tags" style="margin-top:16px">' + tags + "</p>";
+    return html;
+  }
+
+  function viewVideoNotesPrint(note) {
+    const list = note ? [note] : filteredVideoNotes();
+    const heading = note ? (note.title || "Video note") : "Video notes";
+    let html = '<div class="page-head print-head"><p class="kicker no-print"><a href="' +
+      (note ? "#/video-notes/" + esc(note.id) : "#/video-notes") + '">Back</a></p><h1>' + esc(heading) + "</h1>" +
+      (note ? "" : "<p class=\"tiny\">" + list.length + " note" + (list.length === 1 ? "" : "s") + (vnSearch || vnTag || vnVenture ? " in the current filters" : "") + "</p>") +
+      '</div><p class="row no-print"><button type="button" class="btn primary" data-action="vn-print">Print</button>' +
+      (note ? '<button type="button" class="btn" data-action="vn-copy" data-id="' + esc(note.id) + '">Copy to clipboard</button>' +
+        '<button type="button" class="btn" data-action="vn-share" data-id="' + esc(note.id) + '">Share</button>' : "") +
+      "</p>";
+    if (!list.length) {
+      html += '<div class="empty"><p>Nothing to print in this list.</p></div>';
+      return html;
+    }
+    list.forEach((n) => { html += printNoteHtml(n, !note); });
+    return html;
+  }
+
+  function printNoteHtml(n, showTitle) {
+    const v = getVenture(n.ventureId);
+    const p = howtoProgress(n.howToSteps);
+    const id = n.videoId || parseYouTubeId(n.youtubeUrl);
+    const href = n.youtubeUrl || (id ? youtubeWatchUrl(id) : "");
+    let html = '<article class="card print-note">';
+    if (showTitle) html += "<h2>" + esc(n.title || "Video note") + "</h2>";
+    html += '<p class="tiny">Updated ' + esc(formatWhen(n.updatedAt)) + (v ? " · Linked to " + esc(v.name) : "") + "</p>";
+    if (href) {
+      html += '<p><strong>Video:</strong> <a href="' + esc(href) + '" target="_blank" rel="noopener noreferrer">' +
+        esc(n.title || href) + "</a></p>";
+      if (id) {
+        html += '<p class="print-thumb"><img class="yt-thumb" src="https://i.ytimg.com/vi/' + esc(id) + '/hqdefault.jpg" width="240" height="135" alt=""></p>';
+      }
+    }
+    html += "<h3>Video summary</h3>" +
+      (n.summary ? "<p class=\"vn-body\">" + esc(n.summary).replace(/\n/g, "<br>") + "</p>" : "<p class=\"muted\">No summary pasted yet.</p>");
+    html += "<h3>How I’ll use this in my business</h3>" +
+      (n.useInBusiness ? "<p class=\"vn-body\">" + esc(n.useInBusiness).replace(/\n/g, "<br>") + "</p>" : "<p class=\"muted\">Nothing written yet.</p>");
+    html += "<h3>How to do it: step-by-step instructions</h3>";
+    if (!p.total) html += "<p class=\"muted\">No steps yet.</p>";
+    else {
+      html += '<p class="tiny">' + p.done + " of " + p.total + " done</p>" +
+        '<div class="progress" aria-hidden="true"><span style="width:' + p.pct + '%"></span></div>' +
+        '<ol class="howto-list print-steps">';
+      (n.howToSteps || []).forEach((s) => {
+        html += "<li" + (s.done ? ' class="done"' : "") + ">" + (s.done ? "☑ " : "☐ ") + esc(s.text) + "</li>";
+      });
+      html += "</ol>";
+    }
+    if ((n.tags || []).length) html += '<p class="tiny">Tags: ' + esc(n.tags.join(", ")) + "</p>";
+    html += "</article>";
+    return html;
+  }
+
+  function videoNotePlainText(note) {
+    const v = getVenture(note.ventureId);
+    const lines = [];
+    lines.push(note.title || "Video note");
+    if (note.youtubeUrl) lines.push("Video: " + note.youtubeUrl);
+    if (v) lines.push("Linked to: " + v.name);
+    if ((note.tags || []).length) lines.push("Tags: " + note.tags.join(", "));
+    lines.push("");
+    if (note.summary) {
+      lines.push("Video summary");
+      lines.push(note.summary);
+      lines.push("");
+    }
+    if (note.useInBusiness) {
+      lines.push("How I'll use this in my business");
+      lines.push(note.useInBusiness);
+      lines.push("");
+    }
+    const steps = note.howToSteps || [];
+    if (steps.length) {
+      const p = howtoProgress(steps);
+      lines.push("How to do it: step-by-step instructions (" + p.done + " of " + p.total + " done)");
+      steps.forEach((s, i) => {
+        lines.push((s.done ? "[x] " : "[ ] ") + (i + 1) + ". " + s.text);
+      });
+    }
+    return lines.join("\n").trim();
+  }
+
+  function copyText(text, okMsg) {
+    const fail = function () {
+      toast("Could not copy. Select the text and copy it yourself.");
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        toast(okMsg || "Copied.");
+      }).catch(function () { fallbackCopy(text, okMsg, fail); });
+    } else {
+      fallbackCopy(text, okMsg, fail);
+    }
+  }
+
+  function fallbackCopy(text, okMsg, fail) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      const ok = document.execCommand("copy");
+      if (ok) toast(okMsg || "Copied.");
+      else fail();
+    } catch (e) {
+      fail();
+    }
+    document.body.removeChild(ta);
+  }
+
+  function pasteIntoField(field, after) {
+    const fallback = function () {
+      toast("This browser blocked clipboard access. Long-press the box or press Ctrl+V (Command+V on a Mac) to paste.");
+      if (field) field.focus();
+    };
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      fallback();
+      return;
+    }
+    navigator.clipboard.readText().then(function (text) {
+      if (!text) {
+        toast("The clipboard is empty.");
+        if (field) field.focus();
+        return;
+      }
+      if (!field) return;
+      if (!field.value) field.value = text;
+      else field.value = field.value.replace(/\s*$/, "") + "\n" + text;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.focus();
+      if (after) after(text);
+    }).catch(fallback);
+  }
+
+  function createVideoNote(fields) {
+    if (!state.videoNotes) state.videoNotes = [];
+    const n = {
+      id: uid(),
+      title: String(fields.title || "").trim(),
+      youtubeUrl: String(fields.youtubeUrl || "").trim(),
+      videoId: fields.videoId || parseYouTubeId(fields.youtubeUrl),
+      summary: String(fields.summary || "").trim(),
+      useInBusiness: String(fields.useInBusiness || "").trim(),
+      ventureId: fields.ventureId || "",
+      tags: fields.tags || [],
+      howToSteps: copySteps(fields.howToSteps),
+      createdAt: nowISO(),
+      updatedAt: nowISO()
+    };
+    state.videoNotes.push(n);
+    save();
+    return n;
+  }
+
+  function addHowtoFromPaste() {
+    const box = document.getElementById("howtoPaste");
+    const text = box ? box.value : "";
+    const parts = splitSteps(text);
+    if (!parts.length) {
+      toast("Paste or type some steps first.");
+      if (box) box.focus();
+      return;
+    }
+    const ctx = currentHowtoContext();
+    const steps = copySteps(ctx.steps);
+    parts.forEach((t) => {
+      const text = t.slice(0, VN_STEP_MAX);
+      if (text) steps.push({ id: uid(), text: text, done: false });
+    });
+    if (box) box.value = "";
+    commitHowtoSteps(steps);
+    toast("Added " + parts.length + " step" + (parts.length === 1 ? "" : "s") + ".");
+  }
+
+  function addHowtoOne() {
+    const input = document.getElementById("howtoAdd");
+    const text = input ? String(input.value || "").trim() : "";
+    if (!text) {
+      toast("Type a step first.");
+      if (input) input.focus();
+      return;
+    }
+    const ctx = currentHowtoContext();
+    const steps = copySteps(ctx.steps);
+    steps.push({ id: uid(), text: text.slice(0, VN_STEP_MAX), done: false });
+    if (input) input.value = "";
+    commitHowtoSteps(steps);
+  }
+
+  function moveHowto(id, dir) {
+    const ctx = currentHowtoContext();
+    const steps = copySteps(ctx.steps);
+    const i = steps.findIndex((s) => s.id === id);
+    if (i < 0) return;
+    const j = i + dir;
+    if (j < 0 || j >= steps.length) return;
+    const tmp = steps[i];
+    steps[i] = steps[j];
+    steps[j] = tmp;
+    vnEditingStep = "";
+    commitHowtoSteps(steps);
+  }
+
+  function deleteHowto(id) {
+    if (!confirm("Delete this step?")) return;
+    const ctx = currentHowtoContext();
+    vnEditingStep = "";
+    commitHowtoSteps(copySteps(ctx.steps).filter((s) => s.id !== id));
+  }
+
+  function startHowtoEdit(id) {
+    vnEditingStep = id;
+    refreshHowtoBlock();
+  }
+
+  function saveHowtoEdit(id) {
+    const input = document.getElementById("howtoEditInput");
+    const text = input ? String(input.value || "").trim() : "";
+    if (!text) {
+      toast("A step needs some text.");
+      if (input) input.focus();
+      return;
+    }
+    const ctx = currentHowtoContext();
+    const steps = copySteps(ctx.steps);
+    const s = steps.find((x) => x.id === id);
+    if (s) s.text = text.slice(0, VN_STEP_MAX);
+    vnEditingStep = "";
+    commitHowtoSteps(steps);
+  }
+
+  function toggleHowto(id, on) {
+    const ctx = currentHowtoContext();
+    if (ctx.mode === "form") return;
+    const steps = ctx.steps;
+    const s = steps.find((x) => x.id === id);
+    if (!s) return;
+    s.done = !!on;
+    touch(ctx.note); save();
+    const p = howtoProgress(steps);
+    const label = document.getElementById("howtoProgressLabel");
+    if (label) {
+      label.textContent = p.done + " of " + p.total + " done";
+      label.className = "badge ok";
+    }
+    const bar = document.querySelector("#howtoProgressBar > span");
+    if (bar) bar.style.width = p.pct + "%";
+    const item = document.querySelector('.howto-item[data-id="' + id + '"] span');
+    if (item) item.classList.toggle("done", !!on);
+  }
+
+  function exportVideoNotes() {
+    const payload = {
+      app: "business-successhq-video-notes",
+      exportedAt: nowISO(),
+      videoNotes: state.videoNotes || []
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "business-successhq-video-notes-" + todayISO() + ".json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast("Video notes downloaded.");
+  }
+
+  function importVideoNotesFile(file) {
+    const reader = new FileReader();
+    reader.onload = function () {
+      try {
+        const data = JSON.parse(reader.result);
+        let list = [];
+        if (Array.isArray(data)) list = data;
+        else if (data && Array.isArray(data.videoNotes)) list = data.videoNotes;
+        else if (data && data.app === "business-successhq-video-notes" && Array.isArray(data.notes)) list = data.notes;
+        else {
+          toast("That file does not look like a video notes export.");
+          return;
+        }
+        const cleaned = list.map((n) => {
+          if (!n || typeof n !== "object") return null;
+          return {
+            id: uid(),
+            title: String(n.title || "Video note").trim().slice(0, 200),
+            youtubeUrl: String(n.youtubeUrl || "").trim().slice(0, 500),
+            videoId: parseYouTubeId(n.youtubeUrl) || (n.videoId && /^[A-Za-z0-9_-]{11}$/.test(n.videoId) ? n.videoId : ""),
+            summary: String(n.summary || "").slice(0, VN_SUMMARY_MAX),
+            useInBusiness: String(n.useInBusiness || "").slice(0, VN_USE_MAX),
+            ventureId: (n.ventureId && getVenture(n.ventureId)) ? n.ventureId : "",
+            tags: parseTags(Array.isArray(n.tags) ? n.tags.join(", ") : n.tags),
+            howToSteps: copySteps(n.howToSteps || n.steps || []).map((s) => {
+              s.text = s.text.slice(0, VN_STEP_MAX);
+              return s;
+            }),
+            createdAt: n.createdAt || nowISO(),
+            updatedAt: nowISO()
+          };
+        }).filter((n) => n && (n.title || n.summary || n.useInBusiness || n.howToSteps.length));
+        if (!cleaned.length) {
+          toast("No video notes were found in that file.");
+          return;
+        }
+        if (!confirm("Add " + cleaned.length + " video note" + (cleaned.length === 1 ? "" : "s") + " from this file? The notes already on this device will be kept.")) return;
+        if (!state.videoNotes) state.videoNotes = [];
+        state.videoNotes = state.videoNotes.concat(cleaned);
+        save();
+        toast("Imported " + cleaned.length + " video note" + (cleaned.length === 1 ? "" : "s") + ".");
+        render();
+      } catch (err) {
+        toast("Could not read that file.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function afterRender() {
+    const r = parseRoute();
+    const printing = r.name === "video-notes" && (r.parts[1] === "print" || r.parts[2] === "print");
+    document.body.classList.toggle("print-view", printing);
+    document.querySelectorAll("img.yt-thumb").forEach((img) => {
+      img.addEventListener("error", function () { this.hidden = true; });
+    });
+    const add = document.getElementById("howtoAdd");
+    if (add) {
+      add.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); addHowtoOne(); }
+      });
+    }
+    const edit = document.getElementById("howtoEditInput");
+    if (edit) {
+      edit.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); saveHowtoEdit(edit.closest("[data-id]") ? edit.closest("[data-id]").getAttribute("data-id") : vnEditingStep); }
+        if (e.key === "Escape") { e.preventDefault(); vnEditingStep = ""; refreshHowtoBlock(); }
+      });
+    }
+  }
+
   function viewAbout() {
     return '<div class="page-head"><p class="kicker">About</p><h1>About Business SuccessHQ</h1></div>' +
       '<div class="card"><p>Business SuccessHQ is an original planning tool. You can use it with any business idea. It helps you capture ideas, score them, validate them, write a plan, follow official checklists, and track goals, habits, and numbers you enter yourself.</p>' +
       "<p>It is not affiliated with The Success Playbook YouTube channel (@successplaybookhq), or with any other company, show, or website that uses a similar name. It is not a copy of another product. The Ideas section includes a collection summarized from that channel's public videos; ideas you add from it are copies you can score yourself.</p>" +
       "<p>This app does not give legal, tax, financial, or trading advice. It does not place trades or file forms for you. Official links go to government sites, which can change.</p>" +
-      "<p>Your information is stored only on this device, in this browser. It is not sent to a server. If you use more than one device, use Export and Import to move a backup yourself.</p>" +
+      "<p>Your information is stored only on this device, in this browser. It is not sent to a server. Video notes, including pasted summaries and step-by-step instructions, stay on this device too. If you use more than one device, use Export and Import to move a backup yourself. Video notes also have their own export and import.</p>" +
       "<p>Do not enter Social Security numbers, full Employer Identification Numbers, bank or card numbers, passwords, or other sensitive personal data.</p></div>" +
       '<div class="card" style="margin-top:16px"><h2>Backup</h2>' +
       "<p>Download a copy of your data, or replace the data on this device with a backup file.</p>" +
@@ -1127,6 +1934,7 @@
       case "playbooks": html = viewPlaybooks(); break;
       case "library": html = viewLibrary(); break;
       case "notes": html = viewNotes(); break;
+      case "video-notes": html = viewVideoNotes(); break;
       case "about": html = viewAbout(); break;
       default: html = viewHome(); break;
     }
@@ -1134,6 +1942,7 @@
     document.getElementById("main").scrollTop = 0;
     window.scrollTo(0, 0);
     closeMenu();
+    afterRender();
   }
 
   function useStarter(id) {
@@ -1196,7 +2005,98 @@
     return v;
   }
 
-  function onSubmit(e) {
+  function handleVideoNoteClick(btn, action) {
+    if (action === "paste-vn-url") {
+      const form = vnFormEl();
+      pasteIntoField(form && form.youtubeUrl, function () {
+        persistVnDraftFromForm();
+        const form2 = vnFormEl();
+        const box = document.getElementById("ytPreview");
+        if (form2 && box) box.outerHTML = youtubePreviewHtml(form2.youtubeUrl.value, form2.title.value);
+      });
+      return true;
+    }
+    if (action === "paste-vn-summary") {
+      const form = vnFormEl();
+      pasteIntoField(form && form.summary, function () {
+        if (form && form.summary) updateCharCount(form.summary, "vnSummaryCount", VN_SUMMARY_MAX);
+        persistVnDraftFromForm();
+      });
+      return true;
+    }
+    if (action === "paste-vn-use") {
+      const form = vnFormEl();
+      pasteIntoField(form && form.useInBusiness, function () {
+        if (form && form.useInBusiness) updateCharCount(form.useInBusiness, "vnUseCount", VN_USE_MAX);
+        persistVnDraftFromForm();
+      });
+      return true;
+    }
+    if (action === "paste-howto") {
+      const box = document.getElementById("howtoPaste");
+      pasteIntoField(box, function () { addHowtoFromPaste(); });
+      return true;
+    }
+    if (action === "split-howto") { addHowtoFromPaste(); return true; }
+    if (action === "add-howto") { addHowtoOne(); return true; }
+    if (action === "howto-up") { moveHowto(btn.getAttribute("data-id"), -1); return true; }
+    if (action === "howto-down") { moveHowto(btn.getAttribute("data-id"), 1); return true; }
+    if (action === "howto-edit") { startHowtoEdit(btn.getAttribute("data-id")); return true; }
+    if (action === "howto-save-edit") { saveHowtoEdit(btn.getAttribute("data-id")); return true; }
+    if (action === "howto-cancel-edit") { vnEditingStep = ""; refreshHowtoBlock(); return true; }
+    if (action === "howto-del") { deleteHowto(btn.getAttribute("data-id")); return true; }
+    if (action === "vn-copy") {
+      const n = getVideoNote(btn.getAttribute("data-id"));
+      if (n) copyText(videoNotePlainText(n), "Copied to the clipboard.");
+      return true;
+    }
+    if (action === "vn-share") {
+      const n = getVideoNote(btn.getAttribute("data-id"));
+      if (!n) return true;
+      const text = videoNotePlainText(n);
+      if (navigator.share) {
+        const payload = { title: n.title || "Video note", text: text };
+        if (n.youtubeUrl) payload.url = n.youtubeUrl;
+        navigator.share(payload).catch(function () {});
+      } else {
+        copyText(text, "Copied. You can paste it into a message or document.");
+      }
+      return true;
+    }
+    if (action === "vn-print") { window.print(); return true; }
+    if (action === "vn-export") { exportVideoNotes(); return true; }
+    if (action === "vn-import") {
+      const input = document.getElementById("vnImportFile");
+      if (input) input.click();
+      return true;
+    }
+    if (action === "vn-discard-draft") {
+      if (!confirm("Discard the unsaved draft on this device?")) return true;
+      const form = vnFormEl();
+      const id = form ? form.getAttribute("data-id") : "";
+      clearVnDraft();
+      vnFormSteps = [];
+      vnEditingStep = "";
+      toast("Draft discarded.");
+      if (id && getVideoNote(id)) go("#/video-notes/" + id + "/edit");
+      else go("#/video-notes/new");
+      render();
+      return true;
+    }
+    if (action === "delete-video-note") {
+      const n = getVideoNote(btn.getAttribute("data-id"));
+      if (!n) return true;
+      if (!confirm("Delete the video note \u201c" + (n.title || "Video note") + "\u201d?")) return true;
+      state.videoNotes = (state.videoNotes || []).filter((x) => x.id !== n.id);
+      save();
+      toast("Video note deleted.");
+      go("#/video-notes");
+      return true;
+    }
+    return false;
+  }
+
+    function onSubmit(e) {
     const form = e.target.closest("form");
     if (!form) return;
     const action = form.getAttribute("data-action");
@@ -1229,7 +2129,45 @@
       return;
     }
 
-    if (action === "add-goal") {
+    if (action === "save-video-note") {
+      const titleIn = String(fd.get("title") || "").trim();
+      const summary = String(fd.get("summary") || "").trim();
+      const useInBusiness = String(fd.get("useInBusiness") || "").trim();
+      const youtubeUrl = String(fd.get("youtubeUrl") || "").trim();
+      const tags = parseTags(fd.get("tags"));
+      if (!titleIn && !summary && !useInBusiness && !vnFormSteps.length) {
+        toast("Add a title, a summary, or at least one step first.");
+        return;
+      }
+      const rec = {
+        title: titleIn || (summary ? summary.slice(0, 60) : "Video note"),
+        youtubeUrl: youtubeUrl,
+        videoId: parseYouTubeId(youtubeUrl),
+        summary: summary,
+        useInBusiness: useInBusiness,
+        ventureId: String(fd.get("ventureId") || ""),
+        tags: tags,
+        howToSteps: copySteps(vnFormSteps)
+      };
+      const id = form.getAttribute("data-id");
+      if (id) {
+        const n = getVideoNote(id);
+        if (!n) return;
+        Object.assign(n, rec);
+        touch(n); save();
+        clearVnDraft();
+        toast("Video note saved.");
+        go("#/video-notes/" + n.id);
+      } else {
+        const n = createVideoNote(rec);
+        clearVnDraft();
+        toast("Video note saved.");
+        go("#/video-notes/" + n.id);
+      }
+      return;
+    }
+
+        if (action === "add-goal") {
       const title = String(fd.get("title") || "").trim();
       if (!title) return;
       state.goals.push({
@@ -1361,6 +2299,7 @@
 
     if (action === "use-starter") { useStarter(btn.getAttribute("data-id")); return; }
     if (action === "add-spb-idea") { addSpbIdea(btn.getAttribute("data-id")); return; }
+    if (handleVideoNoteClick(btn, action)) return;
     if (action === "ideas-filter") { ideasFilter = btn.getAttribute("data-id"); render(); return; }
     if (action === "suggest-habit") {
       const title = btn.getAttribute("data-title");
@@ -1380,12 +2319,13 @@
     if (action === "delete-venture") {
       const v = getVenture(btn.getAttribute("data-id"));
       if (!v) return;
-      if (!confirm("Delete \u201c" + v.name + "\u201d? Goals, plans, notes, and numbers tied to it will stay, but they will no longer be tied to this item.")) return;
+      if (!confirm("Delete \u201c" + v.name + "\u201d? Goals, plans, notes, video notes, and numbers tied to it will stay, but they will no longer be tied to this item.")) return;
       state.ventures = state.ventures.filter((x) => x.id !== v.id);
       state.goals.forEach((g) => { if (g.ventureId === v.id) g.ventureId = ""; });
       state.plans.forEach((p) => { if (p.ventureId === v.id) p.ventureId = ""; });
       state.kpis.forEach((k) => { if (k.ventureId === v.id) k.ventureId = ""; });
       state.notes.forEach((n) => { if (n.ventureId === v.id) n.ventureId = ""; });
+      (state.videoNotes || []).forEach((n) => { if (n.ventureId === v.id) n.ventureId = ""; });
       state.habits.forEach((h) => { if (h.ventureId === v.id) h.ventureId = ""; });
       save();
       toast("Deleted.");
@@ -1449,7 +2389,7 @@
       return;
     }
     if (action === "wipe") {
-      if (!confirm("Delete all ideas, plans, goals, habits, numbers, and notes on this device?")) return;
+      if (!confirm("Delete all ideas, plans, goals, habits, numbers, notes, and video notes on this device?")) return;
       if (!confirm("This cannot be undone unless you have a backup. Delete everything?")) return;
       state = emptyState();
       save();
@@ -1464,6 +2404,10 @@
     const action = el.getAttribute("data-action");
     if (!action) {
       if (el.id === "importFile" && el.files && el.files[0]) importFile(el.files[0]);
+      if (el.id === "vnImportFile" && el.files && el.files[0]) {
+        importVideoNotesFile(el.files[0]);
+        el.value = "";
+      }
       if (el.name === "when") {
         const box = document.getElementById("customDays");
         if (box) box.hidden = el.value !== "custom";
@@ -1539,6 +2483,26 @@
     }
     if (action === "filter-notes") {
       go("#/notes" + (el.value ? ("?venture=" + encodeURIComponent(el.value)) : ""));
+      return;
+    }
+    if (action === "vn-filter-venture") {
+      vnVenture = el.value;
+      const q = [];
+      if (vnVenture) q.push("venture=" + encodeURIComponent(vnVenture));
+      if (vnTag) q.push("tag=" + encodeURIComponent(vnTag));
+      go("#/video-notes" + (q.length ? "?" + q.join("&") : ""));
+      return;
+    }
+    if (action === "vn-filter-tag") {
+      vnTag = el.value;
+      const q = [];
+      if (vnVenture) q.push("venture=" + encodeURIComponent(vnVenture));
+      if (vnTag) q.push("tag=" + encodeURIComponent(vnTag));
+      go("#/video-notes" + (q.length ? "?" + q.join("&") : ""));
+      return;
+    }
+    if (action === "toggle-howto") {
+      toggleHowto(el.getAttribute("data-id"), el.checked);
     }
   }
 
@@ -1571,6 +2535,25 @@
       if (!plan) return;
       plan.sections[el.getAttribute("data-key")] = el.value;
       touch(plan); save();
+      return;
+    }
+    if (action === "vn-search") {
+      vnSearch = el.value;
+      refreshVideoNotesList();
+      return;
+    }
+    const form = el.closest && el.closest('form[data-action="save-video-note"]');
+    if (form) {
+      if (el.name === "summary") updateCharCount(el, "vnSummaryCount", VN_SUMMARY_MAX);
+      if (el.name === "useInBusiness") updateCharCount(el, "vnUseCount", VN_USE_MAX);
+      if (el.name === "youtubeUrl" || el.name === "title") {
+        const box = document.getElementById("ytPreview");
+        if (box) box.outerHTML = youtubePreviewHtml(form.youtubeUrl.value, form.title.value);
+        document.querySelectorAll("img.yt-thumb").forEach((img) => {
+          img.addEventListener("error", function () { this.hidden = true; });
+        });
+      }
+      persistVnDraftFromForm();
     }
   }
 
@@ -1585,6 +2568,7 @@
         }
         if (!confirm("Replace all data on this device with this backup?")) return;
         state = Object.assign(emptyState(), data);
+        if (!Array.isArray(state.videoNotes)) state.videoNotes = [];
         save();
         toast("Backup imported.");
         render();

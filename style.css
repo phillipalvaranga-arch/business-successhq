@@ -755,3 +755,87 @@ table.data th { font-size: 0.8rem; color: var(--muted); font-weight: 650; }
   padding: 10px 14px;
   font-size: 0.92rem;
 }
+
+/* Video notes */
+textarea.tall { min-height: 180px; }
+.char-count { font-size: 0.82rem; color: var(--muted); margin: -6px 0 14px; }
+.yt-preview { margin: 0 0 14px; }
+.yt-card {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  text-decoration: none;
+  color: inherit;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.yt-thumb {
+  width: 160px;
+  height: 90px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.yt-card span { font-weight: 650; }
+.vn-toolbar { margin: 8px 0 4px; }
+.vn-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.vn-body { white-space: pre-wrap; }
+.howto { margin: 0; }
+.howto h2 { margin-bottom: 4px; }
+.howto .progress { margin: 10px 0 14px; }
+.howto-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.howto-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.howto-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-weight: 550;
+}
+.howto-check input { margin-top: 4px; flex-shrink: 0; width: 1.15rem; height: 1.15rem; accent-color: var(--gold); }
+.howto-check span.done, .print-steps li.done, .howto-text.done { text-decoration: line-through; color: var(--muted); }
+.howto-text { font-weight: 550; }
+.howto-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.howto-tools .btn { padding: 6px 10px; min-height: 36px; font-size: 0.85rem; }
+.howto-edit { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.howto-edit input { flex: 1 1 200px; }
+.howto-add { align-items: center; margin-top: 8px; }
+.howto-add input { flex: 1 1 200px; }
+.print-note { margin-top: 16px; break-inside: avoid; }
+.print-note h3 { margin-top: 16px; }
+.print-steps { list-style: none; padding: 0; }
+.print-steps li { padding: 6px 0; border-top: 1px solid var(--line); }
+.print-thumb { margin: 8px 0; }
+
+@media print {
+  .skip, .top, .rail, .tabs, .rail-backdrop, .toast, .no-print, .menu-btn, .top-actions {
+    display: none !important;
+  }
+  .shell, .workspace, main, #view {
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    width: 100% !important;
+    max-width: none !important;
+  }
+  body { background: #fff; }
+  .card, .print-note {
+    box-shadow: none;
+    border: 1px solid #ccc;
+    break-inside: avoid;
+  }
+  .howto-tools, .howto-add, .howto .field, .howto .row { display: none !important; }
+  a { color: #000; text-decoration: none; }
+  .yt-thumb { width: 200px; height: 112px; }
+}
