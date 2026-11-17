@@ -736,3 +736,22 @@ table.data th, table.data td {
 table.data th { font-size: 0.8rem; color: var(--muted); font-weight: 650; }
 
 .danger-zone { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+
+.spb-teaser { margin: 18px 0 20px; }
+.spb-teaser h2 { margin-bottom: 6px; }
+.spb-list { margin-top: 16px; }
+.spb-card h2 { margin-bottom: 8px; font-size: 1.2rem; }
+.spb-card blockquote {
+  margin: 10px 0 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--gold);
+  color: var(--ink-soft);
+  font-style: italic;
+}
+.note {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 0.92rem;
+}

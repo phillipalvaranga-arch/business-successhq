@@ -393,8 +393,9 @@
   function ideaCard(v) {
     const path = pathState(v);
     const pct = Math.round((path.done / path.total) * 100);
+    const fromSpb = v.sourceVideoId ? ' <span class="badge">From The Success Playbook</span>' : "";
     return '<a class="card idea-card accent" href="#/ideas/' + esc(v.id) + '">' +
-      '<div class="spread"><span class="title">' + esc(v.name) + "</span><span>" + kindBadge(v.kind) + " " + scoreBadge(v) + "</span></div>" +
+      '<div class="spread"><span class="title">' + esc(v.name) + "</span><span>" + kindBadge(v.kind) + " " + scoreBadge(v) + fromSpb + "</span></div>" +
       (v.description ? "<p class=\"tiny\">" + esc(v.description.slice(0, 160)) + (v.description.length > 160 ? "…" : "") + "</p>" : "") +
       '<div class="tiny">Path ' + path.done + " of " + path.total + " steps</div>" +
       '<div class="progress" aria-hidden="true"><span style="width:' + pct + '%"></span></div></a>';
@@ -424,11 +425,11 @@
       body += '<div class="empty card accent">' +
         "<h2>Start with an idea</h2>" +
         "<p>This app is built for any business idea, not just one kind of work. Add a name and a short description, then score it and follow the path from idea to launch.</p>" +
-        '<p class="row"><a class="btn primary" href="#/ideas/new">Add an idea</a></p>' +
+        '<p class="row"><a class="btn primary" href="#/ideas/new">Add an idea</a><a class="btn" href="#/ideas/from-spb">From SuccessPlaybookHQ</a></p>' +
         startersBox() +
         "</div>";
     } else {
-      body += '<p class="row"><a class="btn primary" href="#/ideas/new">Add an idea</a><a class="btn" href="#/ideas">All ideas</a></p>';
+      body += '<p class="row"><a class="btn primary" href="#/ideas/new">Add an idea</a><a class="btn" href="#/ideas">All ideas</a><a class="btn" href="#/ideas/from-spb">From SuccessPlaybookHQ</a></p>';
       if (recent.length) {
         body += "<h2>Continue</h2><div class=\"list\">" + recent.map(ideaCard).join("") + "</div>";
       }
@@ -452,6 +453,7 @@
   function viewIdeas() {
     const r = parseRoute();
     if (r.parts[1] === "new") return viewIdeaForm(null);
+    if (r.parts[1] === "from-spb") return viewSpbCollection();
     if (r.parts[1]) {
       const v = getVenture(r.parts[1]);
       if (!v) return notFound("That idea or business was not found.");
@@ -476,6 +478,8 @@
       filterBtn("all", "All") + filterBtn("idea", "Ideas") + filterBtn("business", "Businesses") +
       "</div>";
 
+    html += spbCollectionTeaser();
+
     if (!state.ventures.length) {
       html += '<div class="empty"><h2>No ideas yet</h2><p>Add your first idea, or use an optional starter for a business you already have.</p></div>' + startersBox();
     } else if (!list.length) {
@@ -484,6 +488,60 @@
       html += '<div class="list">' + list.map(ideaCard).join("") + "</div>";
     }
     return html;
+  }
+
+  function formatViews(n) {
+    return Number(n).toLocaleString("en-US");
+  }
+
+  function costLabel(cost) {
+    if (cost === "low") return "Startup cost: Low";
+    if (cost === "med") return "Startup cost: Medium";
+    if (cost === "high") return "Startup cost: High";
+    return "Startup cost: Not stated";
+  }
+
+  function spbVideoUrl(idea) {
+    return "https://www.youtube.com/watch?v=" + idea.videoId;
+  }
+
+  function alreadyAddedSpb(idea) {
+    return state.ventures.find((v) => v.sourceVideoId === idea.videoId);
+  }
+
+  function spbCollectionTeaser() {
+    return '<div class="card accent spb-teaser">' +
+      "<h2>From SuccessPlaybookHQ</h2>" +
+      "<p>Business ideas summarized from videos on The Success Playbook YouTube channel. Add any of them to your idea bank to score it yourself.</p>" +
+      '<p class="row"><a class="btn gold" href="#/ideas/from-spb">Browse the collection</a></p></div>';
+  }
+
+  function viewSpbCollection() {
+    const ideas = D.SPB_IDEAS || [];
+    const checked = formatDay(D.SPB_IDEAS_CHECKED);
+    return '<div class="page-head"><p class="kicker"><a href="#/ideas">Ideas</a></p><h1>From SuccessPlaybookHQ</h1>' +
+      '<p class="lead">These were chosen from videos the channel actually published. We favored higher view counts, videos that clearly present a startable business model, a fit for a solo founder, and lower startup cost when a cost was stated. The videos are dramatized short stories, not how-to guides. We left out stories that mainly required buying a farm, a factory, a motel, or another large property.</p></div>' +
+      '<p class="note">Ideas summarized from The Success Playbook YouTube channel; not affiliated.</p>' +
+      '<p class="tiny">View counts are as shown on ' + esc(checked) + '. Story income figures in the videos are fiction and are not treated as results here. Startup cost is marked “Not stated” unless the video gives a real cost to start the business.</p>' +
+      '<div class="list spb-list">' + ideas.map(spbIdeaCard).join("") + "</div>";
+  }
+
+  function spbIdeaCard(idea) {
+    const existing = alreadyAddedSpb(idea);
+    const quote = idea.quote
+      ? "<blockquote>“" + esc(idea.quote) + "”</blockquote>"
+      : "";
+    const action = existing
+      ? '<a class="btn" href="#/ideas/' + esc(existing.id) + '">Already in your ideas</a>'
+      : '<button type="button" class="btn primary" data-action="add-spb-idea" data-id="' + esc(idea.id) + '">Add to my ideas</button>';
+    return '<article class="card accent spb-card">' +
+      "<h2>" + esc(idea.name) + "</h2>" +
+      "<p>" + esc(idea.summary) + "</p>" +
+      quote +
+      '<p class="tiny">Source: <a href="' + esc(spbVideoUrl(idea)) + '" target="_blank" rel="noopener noreferrer">' + esc(idea.videoTitle) + "</a></p>" +
+      '<p class="tiny">' + esc(formatDay(idea.published)) + " · " + formatViews(idea.views) + " views (as shown " + esc(formatDay(D.SPB_IDEAS_CHECKED)) + ")</p>" +
+      '<p><span class="badge">' + esc(costLabel(idea.cost)) + "</span></p>" +
+      '<p class="row">' + action + "</p></article>";
   }
 
   function filterBtn(id, label) {
@@ -518,6 +576,7 @@
       ideaSubnav(v, "overview") +
       '<div class="grid grid-2">' +
       '<div class="card accent">' + (v.description ? "<p>" + esc(v.description).replace(/\n/g, "<br>") + "</p>" : "<p class=\"muted\">No description yet.</p>") +
+      (v.sourceUrl ? '<p class="tiny">Source: <a href="' + esc(v.sourceUrl) + '" target="_blank" rel="noopener noreferrer">' + esc(v.sourceTitle || "The Success Playbook video") + "</a>. Ideas summarized from The Success Playbook YouTube channel; not affiliated.</p>" : "") +
       '<p class="row"><a class="btn" href="#/ideas/' + esc(v.id) + '/edit">Edit details</a></p></div>' +
       '<div class="card score-hero">' + scoreRing(r.value, r.counted, r.total) +
       '<div class="copy"><h3>Path to launch</h3><p>' + path.done + " of " + path.total + " steps done.</p>" +
@@ -1035,7 +1094,7 @@
   function viewAbout() {
     return '<div class="page-head"><p class="kicker">About</p><h1>About Business SuccessHQ</h1></div>' +
       '<div class="card"><p>Business SuccessHQ is an original planning tool. You can use it with any business idea. It helps you capture ideas, score them, validate them, write a plan, follow official checklists, and track goals, habits, and numbers you enter yourself.</p>' +
-      "<p>It is not affiliated with The Success Playbook YouTube channel (@successplaybookhq), or with any other company, show, or website that uses a similar name. It is not a copy of another product.</p>" +
+      "<p>It is not affiliated with The Success Playbook YouTube channel (@successplaybookhq), or with any other company, show, or website that uses a similar name. It is not a copy of another product. The Ideas section includes a collection summarized from that channel's public videos; ideas you add from it are copies you can score yourself.</p>" +
       "<p>This app does not give legal, tax, financial, or trading advice. It does not place trades or file forms for you. Official links go to government sites, which can change.</p>" +
       "<p>Your information is stored only on this device, in this browser. It is not sent to a server. If you use more than one device, use Export and Import to move a backup yourself.</p>" +
       "<p>Do not enter Social Security numbers, full Employer Identification Numbers, bank or card numbers, passwords, or other sensitive personal data.</p></div>" +
@@ -1091,6 +1150,29 @@
     go("#/ideas/" + v.id);
   }
 
+  function addSpbIdea(id) {
+    const idea = (D.SPB_IDEAS || []).find((x) => x.id === id);
+    if (!idea) return;
+    const existing = alreadyAddedSpb(idea);
+    if (existing) {
+      toast("That idea is already in your bank.");
+      go("#/ideas/" + existing.id);
+      return;
+    }
+    const quoteLine = idea.quote ? '\n\n"' + idea.quote + '"' : "";
+    const desc = idea.summary + quoteLine + "\n\nSource: " + idea.videoTitle + " — The Success Playbook YouTube channel.";
+    const v = createVenture({
+      name: idea.name,
+      kind: "idea",
+      description: desc,
+      sourceVideoId: idea.videoId,
+      sourceUrl: spbVideoUrl(idea),
+      sourceTitle: idea.videoTitle
+    });
+    toast("Added to your ideas. The scorecard is empty so you can rate it yourself.");
+    go("#/ideas/" + v.id);
+  }
+
   function createVenture(fields) {
     const v = {
       id: uid(),
@@ -1098,6 +1180,9 @@
       kind: fields.kind === "business" ? "business" : "idea",
       description: String(fields.description || "").trim(),
       starterId: fields.starterId || "",
+      sourceVideoId: fields.sourceVideoId || "",
+      sourceUrl: fields.sourceUrl || "",
+      sourceTitle: fields.sourceTitle || "",
       scores: {},
       weights: defaultWeights(),
       validation: { interviews: {}, competitors: {}, testOffer: {} },
@@ -1275,6 +1360,7 @@
     const action = btn.getAttribute("data-action");
 
     if (action === "use-starter") { useStarter(btn.getAttribute("data-id")); return; }
+    if (action === "add-spb-idea") { addSpbIdea(btn.getAttribute("data-id")); return; }
     if (action === "ideas-filter") { ideasFilter = btn.getAttribute("data-id"); render(); return; }
     if (action === "suggest-habit") {
       const title = btn.getAttribute("data-title");

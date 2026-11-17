@@ -343,6 +343,131 @@
     }
   ];
 
+  const SPB_IDEAS_CHECKED = "2026-11-16";
+  const SPB_IDEAS = [
+    {
+      id: "spb-n_8Jo9wpsSU",
+      videoId: "n_8Jo9wpsSU",
+      name: "Street T-shirt stall with a four-shirt bundle",
+      summary: "A street stall sells T-shirts as a four-item bundle, with the fourth shirt priced much lower so the set feels like a smart deal rather than a cheap first shirt.",
+      quote: "People do not always buy the cheapest thing.",
+      videoTitle: "Why Was the Fourth T-Shirt Priced at $2?",
+      published: "2026-10-26",
+      views: 1568995,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-P2xlTO4gQSA",
+      videoId: "P2xlTO4gQSA",
+      name: "A honey marketplace connecting small keepers with shops",
+      summary: "Instead of keeping bees, build a simple marketplace that matches small honey keepers with shops and restaurants, and can also connect members to packaging suppliers.",
+      quote: "",
+      videoTitle: "Peter Skipped the Hives in This Honey Business Story",
+      published: "2026-10-05",
+      views: 1465506,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-AdabSxkvEjE",
+      videoId: "AdabSxkvEjE",
+      name: "Bread delivery that sells convenience, not a new loaf",
+      summary: "Coordinate orders with an existing bakery and deliver the bread so customers can skip the morning line. The offer is convenience, not a new loaf.",
+      quote: "I took an old headache out of people's day.",
+      videoTitle: "Bakery Bread, No Oven: A Story About Selling Convenience",
+      published: "2026-11-03",
+      views: 330299,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-na7sqVomxrg",
+      videoId: "na7sqVomxrg",
+      name: "A bookshop Friday reading club with handwritten recommendations",
+      summary: "A neighborhood bookshop hosts a free Friday reading club with tea and adds a short handwritten note explaining why each book is recommended, giving people a reason to stay.",
+      quote: "People do not come for a book. They come for company.",
+      videoTitle: "Why a Bookshop Serves Free Tea Every Friday",
+      published: "2026-10-09",
+      views: 309424,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-ylnWICUtz2g",
+      videoId: "ylnWICUtz2g",
+      name: "Handmade candles on hotel and spa monthly contracts",
+      summary: "Sell handmade candles on recurring monthly contracts to hotels and spas at a lower unit price, and name scents after local places so guests can buy the same candle later.",
+      quote: "One contract customer is worth more than 10 one-off ones.",
+      videoTitle: "Tessa Cuts Candle Prices for Hotel Contracts",
+      published: "2026-10-26",
+      views: 164494,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-j1C3OYicc8",
+      videoId: "-j1C3OYicc8",
+      name: "Swim coaching that makes progress visible",
+      summary: "A swim coach posts each child's times on a board, marks improvements, and sends families a short clip of a best swim so progress is easy to see.",
+      quote: "Parents do not pay for a lesson, they pay for visible progress.",
+      videoTitle: "A Three-Dollar Whiteboard, No Advertising: Swim Coach’s Plan",
+      published: "2026-10-20",
+      views: 153365,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-BnTQ_QsOko4",
+      videoId: "BnTQ_QsOko4",
+      name: "A home coffee-roasting kit with a bean subscription",
+      summary: "Sell a home roasting kit with a short course, then offer a monthly subscription for fresh beans so the same customers keep buying.",
+      quote: "",
+      videoTitle: "Milo Skipped Roasting Beans to Build a Coffee Kit",
+      published: "2026-10-25",
+      views: 136372,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-O5SBUSzgmx8",
+      videoId: "O5SBUSzgmx8",
+      name: "A moving marketplace that does not require your own truck",
+      summary: "A platform that matches independent movers and their vans with people who need a move, and can also offer packing supplies through the same app.",
+      quote: "",
+      videoTitle: "Theo Builds a Truck-Free System for Moving Jobs",
+      published: "2026-10-07",
+      views: 133584,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-WTh4SMklxFs",
+      videoId: "WTh4SMklxFs",
+      name: "A hair salon with subscriptions, referrals, and a $1 makeover raffle",
+      summary: "A salon sells monthly and yearly subscriptions with a free evening blow-dry, uses a two-way referral discount, and runs a weekly $1 raffle for a makeover.",
+      quote: "",
+      videoTitle: "How a Salon Used a $1 Makeover Raffle to Draw Customers",
+      published: "2026-10-17",
+      views: 66862,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-InjzL-_Jivk",
+      videoId: "InjzL-_Jivk",
+      name: "A dog-walking marketplace with ratings",
+      summary: "A marketplace that connects freelance dog walkers with owners, using ratings and reviews, rather than walking the dogs yourself.",
+      quote: "",
+      videoTitle: "A Dog-Walking App That Needed No Dog Walking",
+      published: "2026-10-16",
+      views: 34680,
+      cost: "not-stated"
+    },
+    {
+      id: "spb-_eOG-QByG9s",
+      videoId: "_eOG-QByG9s",
+      name: "A taco truck that names its farm and takes orders by text",
+      summary: "A taco truck names the farm that supplies its corn and lets customers text their orders before they arrive so the line moves faster.",
+      quote: "You have a story. You simply never told it.",
+      videoTitle: "Nathan’s Taco Truck Had Excellent Food but No Name",
+      published: "2026-10-24",
+      views: 24231,
+      cost: "not-stated"
+    }
+  ];
+
   global.BIZHQ_DATA = {
     SCORE_CRITERIA,
     VALIDATION,
@@ -351,6 +476,8 @@
     STARTERS,
     HABIT_SUGGESTIONS,
     PLAYBOOKS,
-    LIBRARY
+    LIBRARY,
+    SPB_IDEAS,
+    SPB_IDEAS_CHECKED
   };
 })(window);

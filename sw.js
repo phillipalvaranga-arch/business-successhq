@@ -1,4 +1,4 @@
-const C = 'bizhq-v3';
+const C = 'bizhq-v4';
 const F = [
   './',
   'index.html',
