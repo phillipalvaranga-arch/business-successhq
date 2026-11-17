@@ -16,6 +16,7 @@
     { id: "library", href: "#/library", label: "Library", group: "Guides", ico: "L" },
     { id: "notes", href: "#/notes", label: "Notes", group: "Guides", ico: "T" },
     { id: "video-notes", href: "#/video-notes", label: "Video notes", group: "Guides", ico: "V" },
+    { id: "sync", href: "#/sync", label: "Sync", group: "More", ico: "S" },
     { id: "about", href: "#/about", label: "About", group: "More", ico: "A" }
   ];
 
@@ -51,27 +52,98 @@
       notes: [],
       videoNotes: [],
       playbookProgress: {},
-      filters: {}
+      filters: {},
+      settings: {},
+      settingsTimes: {},
+      tombstones: { ventures: {}, goals: {}, plans: {}, habits: {}, kpis: {}, notes: {}, videoNotes: {}, habitLogs: {}, playbookProgress: {} }
     };
   }
 
   function load() {
     try {
       const raw = localStorage.getItem(KEY);
-      if (!raw) return emptyState();
+      if (!raw) return migrateState(emptyState());
       const s = JSON.parse(raw);
-      return Object.assign(emptyState(), s);
+      return migrateState(Object.assign(emptyState(), s));
     } catch (e) {
-      return emptyState();
+      return migrateState(emptyState());
     }
   }
 
-  function save() {
+  function migrateState(s) {
+    if (!s.tombstones) s.tombstones = (window.BizhqSync && BizhqSync.emptyTombs()) || emptyState().tombstones;
+    ["ventures", "goals", "plans", "habits", "kpis", "notes", "videoNotes", "habitLogs", "playbookProgress"].forEach(function (k) {
+      if (!s.tombstones[k]) s.tombstones[k] = {};
+    });
+    if (!s.settings) s.settings = {};
+    if (!s.settingsTimes) s.settingsTimes = {};
+    if (!s.filters) s.filters = {};
+    if (!Array.isArray(s.videoNotes)) s.videoNotes = [];
+    if (s.settings.theme == null) {
+      try { s.settings.theme = localStorage.getItem(THEME_KEY) || ""; } catch (e) { s.settings.theme = ""; }
+    }
+    s.habitLogs = normalizeFlagMap(s.habitLogs);
+    s.playbookProgress = normalizeFlagMap(s.playbookProgress);
+    s.version = 2;
+    return s;
+  }
+
+  function normalizeFlagMap(src) {
+    const out = {};
+    Object.keys(src || {}).forEach(function (a) {
+      const row = src[a] || {};
+      out[a] = {};
+      Object.keys(row).forEach(function (b) {
+        const e = row[b];
+        if (e === true) out[a][b] = { value: true, updatedAt: "" };
+        else if (e && typeof e === "object") out[a][b] = { value: !!e.value, updatedAt: e.updatedAt || "" };
+        else if (e === false) out[a][b] = { value: false, updatedAt: "" };
+      });
+    });
+    return out;
+  }
+
+  function flagOn(rec, id) {
+    const e = rec && rec[id];
+    if (e === true) return true;
+    if (e && typeof e === "object") return !!e.value;
+    return false;
+  }
+
+  function setFlag(map, a, b, on) {
+    if (!map[a]) map[a] = {};
+    map[a][b] = { value: !!on, updatedAt: nowISO() };
+  }
+
+  function addTomb(kind, id) {
+    if (!state.tombstones) state.tombstones = BizhqSync.emptyTombs();
+    if (!state.tombstones[kind]) state.tombstones[kind] = {};
+    state.tombstones[kind][id] = nowISO();
+  }
+
+  function setSetting(key, value) {
+    if (!state.settings) state.settings = {};
+    if (!state.settingsTimes) state.settingsTimes = {};
+    state.settings[key] = value;
+    state.settingsTimes[key] = nowISO();
+  }
+
+  function applyThemeFromSettings() {
+    const theme = state.settings && state.settings.theme;
+    if (theme === "dark" || theme === "light") {
+      document.documentElement.dataset.theme = theme;
+      try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
+    }
+  }
+
+  function save(opts) {
+    opts = opts || {};
     try {
       localStorage.setItem(KEY, JSON.stringify(state));
     } catch (e) {
       toast("Could not save on this device. Storage may be full.");
     }
+    if (!opts.skipPush) schedulePush();
   }
 
   function esc(s) {
@@ -188,7 +260,7 @@
       const rec = progressFor(pid, ventureId);
       const book = D.PLAYBOOKS.find((p) => p.id === pid);
       if (!book) return;
-      const done = book.steps.filter((s) => rec[s.id]).length;
+      const done = book.steps.filter((s) => flagOn(rec, s.id)).length;
       if (done) any += 1;
       if (done >= Math.ceil(book.steps.length * 0.5)) completeish += 1;
     });
@@ -203,8 +275,7 @@
   function setProgress(playbookId, ventureId, stepId, on) {
     const key = playbookId + "::" + (ventureId || "none");
     if (!state.playbookProgress[key]) state.playbookProgress[key] = {};
-    if (on) state.playbookProgress[key][stepId] = true;
-    else delete state.playbookProgress[key][stepId];
+    setFlag(state.playbookProgress, key, stepId, on);
     save();
   }
 
@@ -444,7 +515,8 @@
       body += startersBox();
     }
 
-    body += '<div class="card accent" style="margin-top:20px"><h2>Video notes</h2>' +
+    body += syncTeaserCard() +
+    '<div class="card accent" style="margin-top:20px"><h2>Video notes</h2>' +
       "<p>Paste a YouTube video summary, write how you will use it in your business, and keep step-by-step instructions you can check off.</p>" +
       '<p class="row"><a class="btn" href="#/video-notes">Open video notes</a><a class="btn" href="#/video-notes/new">Add a video note</a></p></div>';
 
@@ -808,7 +880,7 @@
   }
 
   function isHabitDone(h, iso) {
-    return !!(state.habitLogs[h.id] && state.habitLogs[h.id][iso]);
+    return flagOn((state.habitLogs || {})[h.id], iso);
   }
 
   function habitStreak(h) {
@@ -1025,7 +1097,7 @@
       '<div class="grid grid-2">';
     D.PLAYBOOKS.forEach((p) => {
       const rec = progressFor(p.id, ventureId);
-      const done = p.steps.filter((s) => rec[s.id]).length;
+      const done = p.steps.filter((s) => flagOn(rec, s.id)).length;
       html += '<a class="card play-card accent" href="#/playbooks/' + p.id + (ventureId ? ("?venture=" + encodeURIComponent(ventureId)) : "") + '">' +
         '<p class="kicker">' + esc(p.category) + '</p><div class="title">' + esc(p.name) + "</div>" +
         '<p class="tiny">' + esc(p.summary) + "</p>" +
@@ -1038,7 +1110,7 @@
 
   function viewPlaybook(book, ventureId) {
     const rec = progressFor(book.id, ventureId);
-    const done = book.steps.filter((s) => rec[s.id]).length;
+    const done = book.steps.filter((s) => flagOn(rec, s.id)).length;
     const v = getVenture(ventureId);
     let html = '<div class="page-head"><p class="kicker"><a href="#/playbooks' + (ventureId ? ("?venture=" + encodeURIComponent(ventureId)) : "") + '">Playbooks</a> · ' + esc(book.category) + "</p><h1>" + esc(book.name) + "</h1>" +
       '<p class="lead">' + esc(book.summary) + "</p></div>" +
@@ -1049,7 +1121,7 @@
       '<div class="card"><div class="tiny">' + done + " of " + book.steps.length + " checked</div>" +
       '<div class="progress"><span style="width:' + Math.round((done / book.steps.length) * 100) + '%"></span></div>' +
       book.steps.map((s) => {
-        const on = !!rec[s.id];
+        const on = flagOn(rec, s.id);
         return '<div class="check-item' + (on ? " done" : "") + '"><input type="checkbox" id="pb-' + book.id + "-" + s.id + '"' + (on ? " checked" : "") +
           ' data-action="toggle-step" data-book="' + book.id + '" data-key="' + s.id + '" data-venture="' + esc(ventureId || "") + '">' +
           "<div><label for=\"pb-" + book.id + "-" + s.id + '">' + esc(s.text) + "</label>" +
@@ -2294,6 +2366,7 @@
       img.addEventListener("error", function () { this.hidden = true; });
     });
     bindVnImportUi();
+    renderSyncStatus();
     const add = document.getElementById("howtoAdd");
     if (add) {
       add.addEventListener("keydown", function (e) {
@@ -2314,10 +2387,11 @@
       '<div class="card"><p>Business SuccessHQ is an original planning tool. You can use it with any business idea. It helps you capture ideas, score them, validate them, write a plan, follow official checklists, and track goals, habits, and numbers you enter yourself.</p>' +
       "<p>It is not affiliated with The Success Playbook YouTube channel (@successplaybookhq), or with any other company, show, or website that uses a similar name. It is not a copy of another product. The Ideas section includes a collection summarized from that channel's public videos; ideas you add from it are copies you can score yourself.</p>" +
       "<p>This app does not give legal, tax, financial, or trading advice. It does not place trades or file forms for you. Official links go to government sites, which can change.</p>" +
-      "<p>Your information is stored only on this device, in this browser. It is not sent to a server. Video notes, including pasted summaries, imported PDF, Word, or Excel text, and step-by-step instructions, stay on this device. Files you import are read on this device and are not uploaded. If you use more than one device, use Export and Import to move a backup yourself. Video notes also have their own export and import.</p>" +
+      "<p>Your information is stored only on this device, in this browser, unless you turn on Sync. Video notes, including pasted summaries, imported PDF, Word, or Excel text, and step-by-step instructions, stay on this device. Files you import are read on this device and are not uploaded. Source files themselves are not stored or synced — only the text. If you use more than one device, you can connect Sync, or use Export and Import to move a backup yourself. Backups do not include your sync token. Video notes also have their own export and import.</p>" +
       "<p>Do not enter Social Security numbers, full Employer Identification Numbers, bank or card numbers, passwords, or other sensitive personal data.</p></div>" +
+      syncTeaserCard() +
       '<div class="card" style="margin-top:16px"><h2>Backup</h2>' +
-      "<p>Download a copy of your data, or replace the data on this device with a backup file.</p>" +
+      "<p>Download a copy of your data, or replace the data on this device with a backup file. Backups do not include your sync token. If Sync is connected, an imported backup is also sent to your other devices.</p>" +
       '<p class="row"><button type="button" class="btn primary" data-action="export">Export backup</button>' +
       '<button type="button" class="btn" data-action="import">Import backup</button></p>' +
       '<input id="importFile" type="file" accept="application/json,.json" hidden></div>' +
@@ -2346,6 +2420,7 @@
       case "library": html = viewLibrary(); break;
       case "notes": html = viewNotes(); break;
       case "video-notes": html = viewVideoNotes(); break;
+      case "sync": html = viewSync(); break;
       case "about": html = viewAbout(); break;
       default: html = viewHome(); break;
     }
@@ -2513,6 +2588,7 @@
       const n = getVideoNote(btn.getAttribute("data-id"));
       if (!n) return true;
       if (!confirm("Delete the video note \u201c" + (n.title || "Video note") + "\u201d?")) return true;
+      addTomb("videoNotes", n.id);
       state.videoNotes = (state.videoNotes || []).filter((x) => x.id !== n.id);
       save();
       toast("Video note deleted.");
@@ -2552,6 +2628,11 @@
         toast("Idea added.");
         go("#/ideas/" + v.id);
       }
+      return;
+    }
+
+    if (action === "connect-sync") {
+      connectSync();
       return;
     }
 
@@ -2726,6 +2807,8 @@
 
     if (action === "use-starter") { useStarter(btn.getAttribute("data-id")); return; }
     if (action === "add-spb-idea") { addSpbIdea(btn.getAttribute("data-id")); return; }
+    if (action === "sync-now") { runSync("manual"); return; }
+    if (action === "disconnect-sync") { disconnectSync(); return; }
     if (handleVideoNoteClick(btn, action)) return;
     if (action === "ideas-filter") { ideasFilter = btn.getAttribute("data-id"); render(); return; }
     if (action === "suggest-habit") {
@@ -2747,6 +2830,7 @@
       const v = getVenture(btn.getAttribute("data-id"));
       if (!v) return;
       if (!confirm("Delete \u201c" + v.name + "\u201d? Goals, plans, notes, video notes, and numbers tied to it will stay, but they will no longer be tied to this item.")) return;
+      addTomb("ventures", v.id);
       state.ventures = state.ventures.filter((x) => x.id !== v.id);
       state.goals.forEach((g) => { if (g.ventureId === v.id) g.ventureId = ""; });
       state.plans.forEach((p) => { if (p.ventureId === v.id) p.ventureId = ""; });
@@ -2770,6 +2854,7 @@
       const g = state.goals.find((x) => x.id === btn.getAttribute("data-id"));
       if (!g) return;
       if (!confirm("Delete the goal \u201c" + g.title + "\u201d?")) return;
+      addTomb("goals", g.id);
       state.goals = state.goals.filter((x) => x.id !== g.id);
       save(); render();
       return;
@@ -2777,6 +2862,7 @@
     if (action === "delete-habit") {
       const id = btn.getAttribute("data-id");
       if (!confirm("Delete this habit and its check history?")) return;
+      addTomb("habits", id);
       state.habits = state.habits.filter((h) => h.id !== id);
       delete state.habitLogs[id];
       save(); render();
@@ -2784,6 +2870,7 @@
     }
     if (action === "delete-kpi") {
       if (!confirm("Delete this tracker and the figures you entered in it?")) return;
+      addTomb("kpis", btn.getAttribute("data-id"));
       state.kpis = state.kpis.filter((k) => k.id !== btn.getAttribute("data-id"));
       save(); go("#/numbers");
       return;
@@ -2797,6 +2884,7 @@
     }
     if (action === "delete-note") {
       if (!confirm("Delete this note?")) return;
+      addTomb("notes", btn.getAttribute("data-id"));
       state.notes = state.notes.filter((n) => n.id !== btn.getAttribute("data-id"));
       save(); render();
       return;
@@ -2816,7 +2904,7 @@
       return;
     }
     if (action === "wipe") {
-      if (!confirm("Delete all ideas, plans, goals, habits, numbers, notes, and video notes on this device?")) return;
+      if (!confirm("Delete all ideas, plans, goals, habits, numbers, notes, and video notes on this device? This does not remove your sync token. If Sync is connected, data from your other devices may come back the next time this device syncs.")) return;
       if (!confirm("This cannot be undone unless you have a backup. Delete everything?")) return;
       state = emptyState();
       save();
@@ -2877,8 +2965,7 @@
       const id = el.getAttribute("data-id");
       const day = el.getAttribute("data-day") || todayISO();
       if (!state.habitLogs[id]) state.habitLogs[id] = {};
-      if (el.checked) state.habitLogs[id][day] = true;
-      else delete state.habitLogs[id][day];
+      setFlag(state.habitLogs, id, day, el.checked);
       save();
       render();
       return;
@@ -2903,6 +2990,7 @@
     }
     if (action === "filter-playbooks") {
       state.filters.playbook = el.value;
+      setSetting("playbookFilter", el.value);
       save();
       go("#/playbooks" + (el.value ? ("?venture=" + encodeURIComponent(el.value)) : ""));
       return;
@@ -3002,8 +3090,9 @@
           return;
         }
         if (!confirm("Replace all data on this device with this backup?")) return;
-        state = Object.assign(emptyState(), data);
+        state = migrateState(Object.assign(emptyState(), data));
         if (!Array.isArray(state.videoNotes)) state.videoNotes = [];
+        applyThemeFromSettings();
         save();
         toast("Backup imported.");
         render();
@@ -3014,10 +3103,281 @@
     reader.readAsText(file);
   }
 
+
+  let pushTimer = 0;
+  let pullTimer = 0;
+  let syncing = false;
+  let dirty = false;
+  let syncStatus = "idle";
+  let syncError = "";
+
+  function formatStampCentral(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleString("en-US", {
+      timeZone: TZ,
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    }) + " Central";
+  }
+
+  function schedulePush() {
+    if (!window.BizhqSync || !BizhqSync.getToken()) return;
+    dirty = true;
+    renderSyncStatus();
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(function () { runSync("auto"); }, 3000);
+  }
+
+  function schedulePull(reason) {
+    if (!window.BizhqSync || !BizhqSync.getToken()) return;
+    clearTimeout(pullTimer);
+    pullTimer = setTimeout(function () { runSync(reason || "focus"); }, 400);
+  }
+
+  function applyMergedState(merged) {
+    state.ventures = merged.ventures || [];
+    state.goals = merged.goals || [];
+    state.plans = merged.plans || [];
+    state.habits = merged.habits || [];
+    state.kpis = merged.kpis || [];
+    state.notes = merged.notes || [];
+    state.videoNotes = merged.videoNotes || [];
+    state.habitLogs = merged.habitLogs || {};
+    state.playbookProgress = merged.playbookProgress || {};
+    state.settings = merged.settings || {};
+    state.settingsTimes = merged.settingsTimes || {};
+    state.filters = merged.filters || {};
+    state.tombstones = merged.tombstones || BizhqSync.emptyTombs();
+    state.version = 2;
+    applyThemeFromSettings();
+  }
+
+  function runSync(reason) {
+    if (!window.BizhqSync) return Promise.resolve();
+    const token = BizhqSync.getToken();
+    if (!token) return Promise.resolve();
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      syncStatus = "offline";
+      dirty = true;
+      renderSyncStatus();
+      return Promise.resolve();
+    }
+    if (syncing) {
+      dirty = true;
+      return Promise.resolve();
+    }
+    syncing = true;
+    syncStatus = reason === "connect" ? "connecting" : "syncing";
+    syncError = "";
+    renderSyncStatus();
+
+    const afterError = function (err) {
+      syncStatus = "error";
+      syncError = (err && err.message) ? String(err.message) : "Sync could not be completed.";
+    };
+
+    return Promise.resolve()
+      .then(function () {
+        const knownId = BizhqSync.getGistId();
+        if (!knownId) return null;
+        return BizhqSync.getGist(token, knownId).then(function (gist) {
+          return { gist: gist, remote: BizhqSync.readGistData(gist) };
+        }).catch(function () {
+          BizhqSync.setGistId("");
+          return null;
+        });
+      })
+      .then(function (found) {
+        if (found) return found;
+        return BizhqSync.findExistingGist(token).then(function (g) {
+          if (!g) return null;
+          BizhqSync.setGistId(g.id);
+          return BizhqSync.getGist(token, g.id).then(function (gist) {
+            return { gist: gist, remote: BizhqSync.readGistData(gist) };
+          });
+        });
+      })
+      .then(function (found) {
+        if (found && found.remote) {
+          const merged = BizhqSync.mergeStates(state, found.remote);
+          applyMergedState(merged);
+          save({ skipPush: true });
+          render();
+        }
+        const content = JSON.stringify(BizhqSync.syncPayload(state), null, 2);
+        if (!BizhqSync.getGistId()) {
+          return BizhqSync.createGist(token, content).then(function (created) {
+            if (created && created.id) BizhqSync.setGistId(created.id);
+          });
+        }
+        return BizhqSync.patchGist(token, BizhqSync.getGistId(), content);
+      })
+      .then(function () {
+        dirty = false;
+        BizhqSync.setLastSync(nowISO());
+        syncStatus = "synced";
+      })
+      .catch(afterError)
+      .then(function () {
+        syncing = false;
+        renderSyncStatus();
+        if (dirty && BizhqSync.getToken() && navigator.onLine) schedulePush();
+      });
+  }
+
+  function connectSync() {
+    const input = document.getElementById("syncTokenInput");
+    const err = document.getElementById("syncConnectError");
+    if (!input) return;
+    const token = (input.value || "").trim();
+    if (err) err.textContent = "";
+    if (!token) {
+      if (err) err.textContent = "Paste your token first.";
+      input.focus();
+      return;
+    }
+    BizhqSync.setToken(token);
+    input.value = "";
+    syncStatus = "connecting";
+    render();
+    runSync("connect").then(function () {
+      if (syncStatus === "error") {
+        if (syncError.indexOf("not accepted") !== -1) BizhqSync.clearToken();
+        render();
+        return;
+      }
+      toast("This device is connected. Use a token from the same GitHub account on your other devices.");
+      render();
+    });
+  }
+
+  function disconnectSync() {
+    if (!confirm("Remove the token from this device? Your information on this device and the copy in GitHub will stay as they are. Other devices stay connected.")) return;
+    clearTimeout(pushTimer);
+    clearTimeout(pullTimer);
+    BizhqSync.clearToken();
+    BizhqSync.setLastSync("");
+    dirty = false;
+    syncing = false;
+    syncStatus = "idle";
+    syncError = "";
+    toast("The token was removed from this device. Your information is still here.");
+    render();
+  }
+
+  function syncStatusText() {
+    if (!window.BizhqSync || !BizhqSync.getToken()) return "Not connected";
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      return "Offline — changes will sync when you are back online";
+    }
+    if (syncStatus === "connecting") return "Connecting…";
+    if (syncStatus === "syncing") return "Syncing…";
+    if (syncStatus === "error") return "Sync needs attention";
+    if (dirty) return "Waiting to send your latest changes…";
+    if (syncStatus === "synced" || BizhqSync.getLastSync()) return "Connected";
+    return "Connected";
+  }
+
+  function renderSyncStatus() {
+    const line = document.getElementById("syncStatusLine");
+    const last = document.getElementById("syncLastLine");
+    const mask = document.getElementById("syncTokenMask");
+    const actions = document.getElementById("syncConnectedActions");
+    const setup = document.getElementById("syncSetupCard");
+    const errBox = document.getElementById("syncConnectError");
+    const connected = !!(window.BizhqSync && BizhqSync.getToken());
+    const text = syncStatusText();
+    if (line) {
+      line.textContent = text;
+      line.className = "sync-status";
+      if (syncStatus === "error") line.classList.add("err");
+      else if (!connected) line.classList.add("warn");
+      else if (typeof navigator !== "undefined" && navigator.onLine === false) line.classList.add("warn");
+      else if (syncStatus === "synced" || connected) line.classList.add("ok");
+    }
+    if (last) {
+      const lastIso = connected ? BizhqSync.getLastSync() : "";
+      if (!connected) last.textContent = "";
+      else if (lastIso) last.textContent = "Last synced " + formatStampCentral(lastIso);
+      else last.textContent = "Not synced yet.";
+      if (syncStatus === "error" && syncError) {
+        last.textContent = (last.textContent ? last.textContent + " " : "") + syncError;
+      }
+    }
+    if (mask) {
+      mask.textContent = connected ? ("The token stored on this device is " + BizhqSync.maskToken(BizhqSync.getToken())) : "";
+    }
+    if (actions) actions.hidden = !connected;
+    if (setup) setup.hidden = connected;
+    if (errBox && connected) errBox.textContent = "";
+    if (errBox && !connected && syncStatus === "error") errBox.textContent = syncError;
+    const hint = document.getElementById("syncSummaryHint");
+    if (hint) hint.textContent = syncSummaryText();
+  }
+
+  function syncSummaryText() {
+    if (!window.BizhqSync || !BizhqSync.getToken()) {
+      return "Keep the same Business SuccessHQ information on your computer, tablet and phone. You are not connected yet.";
+    }
+    const lastIso = BizhqSync.getLastSync();
+    const last = lastIso ? (" Last synced " + formatStampCentral(lastIso) + ".") : "";
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      return "Offline — changes will sync when you are back online." + last;
+    }
+    if (syncStatus === "error") return "Sync needs attention." + (syncError ? " " + syncError : "") + last;
+    if (syncStatus === "syncing" || syncStatus === "connecting") return syncStatusText() + last;
+    return "Connected to your private GitHub Gist." + last;
+  }
+
+  function syncTeaserCard() {
+    return '<div class="card accent" style="margin-top:20px" id="syncSummaryCard"><h2>Sync across your devices</h2>' +
+      '<p class="help" id="syncSummaryHint">' + esc(syncSummaryText()) + "</p>" +
+      '<p class="row"><a class="btn primary" href="#/sync">Open Sync</a></p></div>';
+  }
+
+  function viewSync() {
+    return '<div class="page-head"><p class="kicker">Sync</p><h1>Sync</h1>' +
+      '<p class="lead">Keep the same ideas, plans, and video notes on your computer, tablet, and phone through a private GitHub Gist on your own account.</p></div>' +
+      '<div class="card" id="syncStatusCard"><h2>Status</h2>' +
+      '<p id="syncStatusLine" class="sync-status">Not connected</p>' +
+      '<p id="syncLastLine" class="help"></p>' +
+      '<p id="syncTokenMask" class="help"></p>' +
+      '<p class="row" id="syncConnectedActions" hidden>' +
+      '<button type="button" class="btn primary" data-action="sync-now">Sync now</button>' +
+      '<button type="button" class="btn danger" data-action="disconnect-sync">Disconnect</button></p></div>' +
+      '<div class="card" id="syncSetupCard" style="margin-top:16px"><h2>Connect this device</h2>' +
+      "<p>Sync uses a private GitHub note (called a Gist) on your own GitHub account. This app never asks for your GitHub password. The access token you paste is stored only on this device and is never shown back in full. It is sent only to api.github.com and is never included in backups.</p>" +
+      '<ol class="steps">' +
+      '<li>Sign in to GitHub in your browser. If you do not have an account yet, create one at <a href="https://github.com/signup" target="_blank" rel="noopener noreferrer">github.com</a> first.</li>' +
+      '<li>Open GitHub’s classic token page to create an access token with only the “gist” permission: <a href="https://github.com/settings/tokens/new?scopes=gist&amp;description=Business%20SuccessHQ%20Sync" target="_blank" rel="noopener noreferrer">github.com/settings/tokens</a>.</li>' +
+      "<li>On that page, confirm that only the <strong>gist</strong> box is checked. For expiration, choose <strong>No expiration</strong> or <strong>1 year</strong>, then click <strong>Generate token</strong>.</li>" +
+      "<li>Copy the token now. GitHub will not show it again.</li>" +
+      "<li>Come back here, paste it below, and tap <strong>Connect</strong>.</li>" +
+      "<li>On your PC, your Lenovo tablet, and your Motorola phone, open Business SuccessHQ and paste the <strong>same token</strong> on this Sync screen.</li>" +
+      "</ol>" +
+      '<p class="help">If you already made a gist-scope token for My Daily Journal, you can reuse it here. It will still create or find a separate private Gist named “Business SuccessHQ Sync,” and will not mix with your journal. Do not share the token with anyone. If it expires, create a new one and connect again.</p>' +
+      '<form data-action="connect-sync" autocomplete="off" id="syncConnectForm">' +
+      '<div class="field"><label><span>GitHub access token</span>' +
+      '<input id="syncTokenInput" name="token" type="password" maxlength="200" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" placeholder="Paste your token"></label></div>' +
+      '<p class="row"><button type="submit" class="btn primary">Connect</button></p>' +
+      '<p id="syncConnectError" class="sync-error" role="alert"></p></form></div>' +
+      '<div class="card" style="margin-top:16px"><h2>How it stays in sync</h2>' +
+      "<p>The first device that connects creates a private Gist named “Business SuccessHQ Sync” (file bizhq-data.json). Other devices that connect with a token from the same account find that same Gist automatically. Changes are sent a few seconds after you make them, and again when you open the app or come back to it. If you are offline, the app keeps your changes and sends them when you are back online.</p>" +
+      "<p>If you edit the same item on two devices before they sync, the later edit is kept. Deleting an item on one device is remembered so it does not come back from the other device, unless that other device changed it more recently.</p>" +
+      "<p>Video Notes source files are not stored or synced — only the text you imported or typed, including step-by-step checklists.</p></div>";
+  }
+
   function toggleTheme() {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+    setSetting("theme", next);
+    save();
     renderNav();
   }
 
@@ -3035,6 +3395,15 @@
     if (e.target.closest("a")) closeMenu();
   });
   window.addEventListener("hashchange", render);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") schedulePull("focus");
+  });
+  window.addEventListener("focus", function () { schedulePull("focus"); });
+  window.addEventListener("online", function () {
+    if (window.BizhqSync && BizhqSync.getToken()) runSync("online");
+  });
+  applyThemeFromSettings();
   if (!location.hash) location.hash = "#/home";
   else render();
+  if (window.BizhqSync && BizhqSync.getToken()) runSync("open");
 })();

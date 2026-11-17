@@ -11,3 +11,5 @@ The Ideas section includes a “From SuccessPlaybookHQ” collection summarized 
 Your information stays on this device (in the browser). It is not sent to a server. Do not enter Social Security numbers, full Employer Identification Numbers, bank or card numbers, or passwords.
 
 This app does not give legal, tax, financial, or trading advice, and it does not place trades or file forms.
+
+You can optionally sync your information across your computer, tablet, and phone through a private GitHub Gist. Open the Sync screen and paste a GitHub token that has only the gist permission. The token stays on that device and is not included in backups.

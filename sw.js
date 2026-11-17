@@ -1,10 +1,11 @@
-const C = 'bizhq-v6';
+const C = 'bizhq-v7';
 const F = [
   './',
   'index.html',
   'style.css',
   'data.js',
   'app.js',
+  'sync.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

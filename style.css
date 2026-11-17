@@ -877,3 +877,22 @@ textarea.tall { min-height: 180px; }
 }
 .vn-dest legend { padding: 0 6px; font-weight: 650; }
 .vn-dest label { display: block; margin: 6px 0; }
+
+/* Sync */
+.steps {
+  margin: 12px 0 16px;
+  padding-left: 1.3em;
+}
+.steps li { margin: 0 0 10px; }
+.steps a { color: var(--navy); word-break: break-word; }
+html[data-theme="dark"] .steps a { color: var(--gold-2); }
+.sync-status {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin: 0 0 6px;
+}
+.sync-status.ok { color: var(--ok); }
+.sync-status.warn { color: var(--warn); }
+.sync-status.err { color: var(--danger); }
+.sync-error { color: var(--danger); min-height: 1.2em; margin: 8px 0 0; }
+#syncSetupCard[hidden], #syncConnectedActions[hidden] { display: none; }
