@@ -272,7 +272,7 @@ html[data-theme="dark"] .tabs a.active { color: var(--gold-2); }
 .menu-bars::after { position: absolute; top: 6px; }
 
 @media (min-width: 960px) {
-  .menu-btn { display: none; }
+  .icon-btn.menu-btn { display: none; }
   .tabs { display: none; }
   .rail { display: block; }
   main { padding: 28px 32px 48px; }
@@ -292,7 +292,7 @@ html[data-theme="dark"] .tabs a.active { color: var(--gold-2); }
     box-shadow: var(--shadow);
   }
   .rail.open { transform: none; }
-  .rail-backdrop {
+  .rail-backdrop:not([hidden]) {
     display: block;
     position: fixed;
     inset: 0;
@@ -300,6 +300,9 @@ html[data-theme="dark"] .tabs a.active { color: var(--gold-2); }
     z-index: 45;
   }
   .hide-sm { display: none !important; }
+}
+@media (max-width: 520px) {
+  .brand-sub { display: none; }
 }
 
 /* Type and layout */
